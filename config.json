@@ -1,0 +1,50 @@
+{
+  "proxy": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 3001
+  },
+  "dashboardAuth": {
+    "enabled": true,
+    "username": "admin",
+    "passwordHash": {
+      "algorithm": "scrypt",
+      "params": {
+        "N": 16384,
+        "r": 8,
+        "p": 1,
+        "keyLen": 64
+      },
+      "saltBase64": "",
+      "hashBase64": ""
+    },
+    "sessionSecret": "",
+    "sessionTtlSeconds": 28800
+  },
+  "logging": {
+    "path": "./data/access.log.jsonl",
+    "maxEntriesInMemory": 500
+  },
+  "filtering": {
+    "mode": "allowlist",
+    "domains": ["google.com", "yahoo.co.jp"]
+  },
+  "blocking": {
+    "domains": ["tiktok.com"]
+  },
+  "inspection": {
+    "maxBodyBytes": 4096,
+    "captureRequestBody": true,
+    "captureResponseBody": true,
+    "bodyCaptureDomains": ["google.com", "yahoo.co.jp"],
+
+    "captureRequestFiles": true,
+    "captureResponseFiles": true,
+    "maxFileBytes": 2097152,
+    "fileSaveDir": "./data/files",
+    "fileCaptureDomains": ["google.com", "yahoo.co.jp"]
+  }
+}

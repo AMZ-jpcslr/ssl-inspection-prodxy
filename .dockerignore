@@ -1,0 +1,15 @@
+# Docker build context から除外するファイル/ディレクトリ
+#
+# 目的
+# - build context を小さくしてビルドを速くし、不要な生成物をイメージに含めない
+#
+# 原理（要点）
+# - `node_modules` や実行時データ、git管理情報はコンテナ内で再生成/マウントする方針です。
+
+node_modules
+.git
+.http-mitm-proxy
+data
+npm-debug.log
+Dockerfile
+docker-compose.yml

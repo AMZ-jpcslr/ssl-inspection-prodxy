@@ -1,0 +1,38 @@
+# Web閲覧監視プロキシ（プロトタイプ）の docker-compose
+#
+# - Dockerfile をビルドしてプロキシ/ダッシュボードを起動。
+# - `DASHBOARD_HOST=0.0.0.0` にして、ホスト側のポートフォワード経由でUIにアクセスできるように。
+# - `./data` と `./.http-mitm-proxy` を volume でマウントし、ログとMITM用データを永続化。
+#
+# 原理（要点）
+# - ログは JSONL で `LOG_PATH` に追記され、ダッシュボードはそれを読み取り。
+# - 企業内のSSL検査等で上流TLS検証が失敗する場合、`NODE_EXTRA_CA_CERTS` を使って追加CAを注入する必要あり。
+
+services:
+  proxy:
+    build: .
+    ports:
+      - "8080:8080"
+      - "3001:3001"
+    environment:
+      # Bind dashboard to all interfaces inside the container so port mapping works
+      DASHBOARD_HOST: "0.0.0.0"
+      DASHBOARD_PORT: "3001"
+      PROXY_HOST: "0.0.0.0"
+      PROXY_PORT: "8080"
+      LOG_PATH: "./data/access.log.jsonl"
+
+      # If the container cannot verify upstream TLS certs (e.g., corporate SSL inspection),
+      # provide the corporate/root CA in PEM format and point Node to it.
+      # NODE_EXTRA_CA_CERTS: "/app/certs/extra-ca.pem"
+      # Enable dashboard authentication by setting these (recommended)
+      # DASHBOARD_AUTH_ENABLED: "true"
+      # DASHBOARD_AUTH_USERNAME: "admin"
+      # DASHBOARD_AUTH_SESSION_SECRET: "<set a random secret>"
+    volumes:
+      - ./data:/app/data
+      - ./.http-mitm-proxy:/app/.http-mitm-proxy
+      - ./config.json:/app/config.json:ro
+
+      # Optional: mount additional CA bundle for upstream TLS verification
+      # - ./certs:/app/certs:ro

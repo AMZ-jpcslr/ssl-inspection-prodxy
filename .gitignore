@@ -1,3 +1,12 @@
+# このリポジトリの `.gitignore`
+#
+# 目的
+# - 実行時に生成されるデータ（ログ、MITM証明書/鍵など）や依存ディレクトリをコミットしない
+# - `config.local.json` のような機密（ダッシュボード認証情報）を誤ってコミットしない
+#
+# 原理（要点）
+# - 生成物/秘密情報/ローカル環境の差分は git 管理外にし、`config.json` は共有しやすい設定に寄せます。
+
 # Python
 __pycache__/
 *.py[cod]
@@ -16,6 +25,9 @@ build/
 # mitmproxy
 .mitmproxy/
 
+# http-mitm-proxy (Node.js MITM)
+.http-mitm-proxy/
+
 # IDE
 .idea/
 .vscode/
@@ -33,6 +45,12 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# App generated data
+data/
+
+# Local config overrides (keep secrets out of git)
+config.local.json
 
 # Database
 *.db
