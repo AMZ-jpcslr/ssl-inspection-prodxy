@@ -16,6 +16,18 @@ Web閲覧監視プロキシ（エントリポイント）
 - 本文は“無制限に読む”とメモリ/プライバシーの問題が出るため、収集量を制限し、
 	テキストっぽい場合だけベストエフォートにデコードして `src/pii.js` の検出ロジックに渡す。
 
+読む順
+1) `main()` … 設定ロード→ダッシュボード→プロキシ起動の順番を掴む
+2) `startMitmProxy()` … http-mitm-proxy のイベントの流れ（ここが心臓部）
+3) `createBodyCollector()` … 本文を「上限つき」で集める仕組み
+4) `createMultipartImageCapture()` … アップロード画像（multipart）の保存
+5) `shouldCaptureBody/shouldCaptureFiles/isBlocked/shouldLog` … 何を収集/保存/ブロックするかの判定
+
+MITM/セキュリティ注意（重要）
+- HTTPSの中身を見るには、端末側でこのプロキシのローカルCAを信頼する必要がある。
+  信頼していない場合、ブラウザがTLSエラーで止まり、アプリ側の403等より先に失敗する。
+- 収集する本文/ファイルは機微情報になりうる。設定（ドメイン絞り・サイズ上限）を前提にしたMVP。
+
 責務分割（このファイルに残す理由）
 - MITMのイベント配線、ストリーム収集、ファイル保存など「プロキシのI/O側」はここに集約
 - HTML生成/認証/ルーティングなど「ダッシュボード側」は `src/dashboard/*` に分離
@@ -45,10 +57,14 @@ const { configurePolicyStore, getBlockDomains } = require('./policyStore');
 // 5) 設定されたドメインはブロック（例: tiktok.com）
 
 // 共通: ドメイン判定
+// ホスト名の表記ゆれを吸収する（小文字化、末尾ドット除去）。
+// - HostヘッダやURLのホストは状況によって揺れるので、比較前に正規化しておく。
 function normalizeHostname(hostname) {
 	return (hostname || '').toLowerCase().replace(/\.$/, '');
 }
 
+// http-mitm-proxy が渡す ctx から、可能な範囲でHost名を取り出す。
+// - エラー時に「どのhostへの通信が落ちたか」をログに出すための補助関数。
 function getHostnameFromCtx(ctx) {
 	// onError でどの通信が落ちたか分かるように、可能な範囲でHostを推定する
 	try {
@@ -63,6 +79,7 @@ function getHostnameFromCtx(ctx) {
 }
 
 // ホスト名がルールにマッチするか（例: rule "google.com" は "google.com" や "www.google.com" にマッチするが "evilgoogle.com" にはマッチしない）
+// - `endsWith("." + rule)` にすることで「ドメイン境界」を守る。
 function hostnameMatches(hostname, rule) {
 	// ホスト名の正規化: 小文字化、末尾のドット削除
 	const host = normalizeHostname(hostname);
@@ -72,6 +89,9 @@ function hostnameMatches(hostname, rule) {
 }
 
 function isBlocked(hostname, config) {
+	// この通信をブロックするか。
+	// - ブロックリストは policyStore の in-memory 値を参照する。
+	// - ダッシュボードの保存操作で更新されるため、ここは毎回 getBlockDomains() で取る。
 	// 現在のブロック対象（ダッシュボードから更新されうる）に一致したらブロック
 	// - policyStore は起動時に config.blocking.domains をデフォルトとして設定される
 	// - ダッシュボードの保存操作で in-memory の一覧が更新され、ここにも即時反映される
@@ -83,6 +103,7 @@ function isBlocked(hostname, config) {
 }
 
 function shouldLog(hostname, config) {
+	// ログ対象かどうか（フィルタリング）。
 	// filtering.mode:
 	// - "all": 全通信をログ対象
 	// - "allowlist": domainsに一致する通信だけログ対象
@@ -98,6 +119,8 @@ function shouldLog(hostname, config) {
 }
 
 function shouldCaptureBody(hostname, config) {
+	// request/response本文を収集するか。
+	// - 本文は機微情報を含みやすいので、設定でドメインを絞れるようにする。
 	// ボディは機微情報を含みやすいので、デフォルトでは対象ドメインを絞る。
 	// - inspection.bodyCaptureDomains があればそれを使用
 	// - なければ filtering.domains を使用（課題の対象: google.com / yahoo.co.jp）
@@ -114,6 +137,8 @@ function shouldCaptureBody(hostname, config) {
 }
 
 function shouldCaptureFiles(hostname, config) {
+	// ファイル保存（画像など）を行うか。
+	// - 本文以上に重い/機微になりやすいので、別設定でさらに絞り込みできる。
 	// ファイル保存（画像など）はさらに機微になりやすいので、デフォルトでは対象ドメインを絞る。
 	// - inspection.fileCaptureDomains があればそれを使用
 	// - なければ inspection.bodyCaptureDomains、さらに無ければ filtering.domains を使用
@@ -133,6 +158,8 @@ function shouldCaptureFiles(hostname, config) {
 }
 
 function buildLogEntry({ url, method, status, hostname }) {
+	// JSONLに保存する「1通信ぶんの基本情報」を作る。
+	// - body/PII/multipart/file などは後で Object.assign で付け足す。
 	return {
 		timestamp: new Date().toISOString(),
 		domain: hostname,
@@ -148,6 +175,8 @@ function buildLogEntry({ url, method, status, hostname }) {
 
 // ボディを一定量まで収集するユーティリティ
 function createBodyCollector(maxBytes) {
+	// ストリームのchunkを「最大maxBytesまで」バッファする。
+	// - maxBytes=0 のときはバッファせず、サイズだけカウントする（multipartでファイル保存する時に使う）。
 	const limit = Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : 0;
 	let totalBytes = 0;
 	let truncated = false;
@@ -184,6 +213,8 @@ function createBodyCollector(maxBytes) {
 	}
 
 	function toLogFields(prefix, contentTypeHeader, contentEncodingHeader) {
+		// バッファした本文を「ログ用のフィールド群」に変換する。
+		// - テキストっぽければ `${prefix}BodyText`、それ以外は `${prefix}BodyBase64` に保存する。
 		const { mime, charset } = parseContentType(contentTypeHeader);
 		const buf = getBuffer();
 		const encoding = String(contentEncodingHeader || '').toLowerCase();
@@ -212,10 +243,15 @@ function createBodyCollector(maxBytes) {
 
 // ファイル保存用のユーティリティ
 function ensureDir(dirPath) {
+	// 保存先ディレクトリが無ければ作る。
 	fs.mkdirSync(dirPath, { recursive: true });
 }
 
 function buildSavedFileName(prefix, mimeType) {
+	// 保存ファイル名を生成する。
+	// - prefix: "req"(リクエスト由来) / "res"(レスポンス由来) など
+	// - ts + random を入れて衝突しにくくする
+	// - mimeType から拡張子を推測する（分からなければbin）
 	const ts = new Date().toISOString().replaceAll(':', '').replaceAll('.', '').replaceAll('-', '');
 	const rand = crypto.randomBytes(6).toString('hex');
 	const mime = String(mimeType || '').toLowerCase();
@@ -229,10 +265,15 @@ function buildSavedFileName(prefix, mimeType) {
 }
 
 function buildFileUrl(fileName) {
+	// ダッシュボードから参照するためのURLを作る。
+	// - server.js が `app.use('/files', express.static(...))` で配信している。
 	return `/files/${encodeURIComponent(String(fileName || ''))}`;
 }
 
 function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
+	// multipart/form-data のボディを解析して、画像ファイルを保存する。
+	// - Busboy がストリームで field/file を分解してくれる。
+	// - このプロトタイプでは「画像だけ保存」「上限超えはスキップ」など割り切りがある。
 	const state = {
 		fields: {},
 		files: [],
@@ -244,6 +285,7 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 	const bb = Busboy({ headers });
 
 	bb.on('field', (name, value) => {
+		// テキストフィールドを収集（同名キーは配列化）。
 		if (!name) return;
 		if (Object.prototype.hasOwnProperty.call(state.fields, name)) {
 			const current = state.fields[name];
@@ -254,6 +296,8 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 	});
 
 	bb.on('file', (fieldname, file, info) => {
+		// ファイルストリームを処理。
+		// - mimeTypeで画像かどうかを判定し、画像のみ保存する。
 		const originalFilename = info && typeof info.filename === 'string' ? info.filename : '';
 		const mimeType = info && typeof info.mimeType === 'string' ? info.mimeType : '';
 		const mime = String(mimeType || '').toLowerCase();
@@ -273,6 +317,7 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 		const out = fs.createWriteStream(absPath);
 
 		file.on('data', (chunk) => {
+			// 受け取ったchunkを保存しつつ、最大サイズを超えたら破棄する。
 			bytes += chunk.length;
 			if (!exceeded && Number.isFinite(maxFileBytes) && maxFileBytes > 0 && bytes > maxFileBytes) {
 				exceeded = true;
@@ -297,6 +342,7 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 		});
 
 		file.on('end', () => {
+			// 保存完了時に state を更新（URL/サイズなどをログに残せる形へ）。
 			try {
 				out.end();
 			} catch {
@@ -341,9 +387,11 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 	return {
 		state,
 		write(chunk) {
+			// onRequestDataで受け取ったchunkをBusboyへ流す。
 			input.write(chunk);
 		},
 		end() {
+			// リクエスト終了をBusboyへ通知する。
 			input.end();
 		},
 	};
@@ -351,6 +399,7 @@ function createMultipartImageCapture({ headers, saveDirAbs, maxFileBytes }) {
 
 // HTMLエスケープとダッシュボード用のテキスト処理ロジック
 function escapeHtml(s) {
+	// ブロックページ等のHTMLに、ユーザー由来（hostなど）の文字列を安全に埋め込むために使用する。
 	return String(s)
 		.replaceAll('&', '&amp;')
 		.replaceAll('<', '&lt;')
@@ -369,6 +418,8 @@ function isValidHttpHeaderName(name) {
 
 // HTTPヘッダ名として無効なものを削除して、削除したヘッダ名のリストも返す
 function sanitizeHeaderNames(headers) {
+	// 外部サーバのレスポンスヘッダに不正な名前が混ざると、Nodeが writeHead で例外→プロキシが落ちることがある。
+	// それを避けるため、クライアントへ返す前にヘッダ名だけチェックして削除する。
 	if (!headers || typeof headers !== 'object') return { headers: {}, removed: [] };
 	const removed = [];
 	for (const key of Object.keys(headers)) {
@@ -384,6 +435,18 @@ function sanitizeHeaderNames(headers) {
 // 通信検査プロキシ（HTTP/HTTPS MITM）
 // ============================================================
 function startMitmProxy(config) {
+	// プロキシ本体の起動。
+	// - http-mitm-proxy のイベント（onRequest/onResponse*）にフックして、ログ収集/ブロック/本文収集/ファイル保存を行う。
+	//
+	// ざっくりしたイベント順（1通信ぶん）
+	// - onConnect: HTTPSのCONNECT（トンネル確立）
+	// - onRequest: HTTPリクエストが来た（ここでブロック判定や、各種フックを登録）
+	//   - onRequestData: リクエストボディのchunk（0回〜複数回）
+	//   - onRequestEnd: リクエストボディの終端
+	// - onResponseHeaders: レスポンスヘッダが来た（ここでヘッダ名サニタイズ）
+	// - onResponse: レスポンス開始（statusCode/headersが確定）
+	//   - onResponseData: レスポンスボディのchunk（0回〜複数回）
+	// - onResponseEnd: レスポンス完了（ここでJSONLへ1行追記して“確定ログ”にする）
 	// http-mitm-proxy が、
 	// - HTTPはそのまま中継
 	// - HTTPSは（必要なら）MITMして中身を見られる状態で中継
@@ -470,6 +533,15 @@ function startMitmProxy(config) {
 		const captureRequestBody = inspection.captureRequestBody !== false;
 		const captureResponseBody = inspection.captureResponseBody !== false;
 
+		// capture* フラグの考え方
+		// - captureRequestBody/captureResponseBody: request/response本文をログに入れる（テキストorbase64）。
+		// - captureRequestFiles/captureResponseFiles: 画像などを「ファイルとして保存」してログにURLだけ入れる。
+		// - maxBodyBytes/maxFileBytes: “保存しすぎて落ちる/漏れる”のを防ぐための上限。
+		//
+		// multipart/form-data の注意
+		// - multipart には「フォームフィールド（テキスト）」と「ファイル（バイナリ）」が混在する。
+		// - 画像アップロードを保存したい場合は、ボディ全体をバッファするより Busboy で分解しながら保存する方が扱いやすい。
+
 		// ここで「ブロック判定」と「ログ記録のフック」を仕込む
 		const req = ctx.clientToProxyRequest;
 		const resToClient = ctx.proxyToClientResponse;
@@ -490,6 +562,9 @@ function startMitmProxy(config) {
 			fullUrl = String(requestPath);
 		}
 
+		// 本文収集バッファ（サイズ上限つき）
+		// - multipart でアップロードファイルを保存する場合、requestBody は「保存しない（max=0）」にして二重に保持しない。
+		//   （実際のfile部分は Busboy がストリームで取り出して保存する）
 		const requestBody = createBodyCollector(isMultipartForm && captureRequestFiles && captureFilesForHost ? 0 : maxBodyBytes);
 		const responseTextBody = createBodyCollector(maxBodyBytes);
 		const responseFileBody = createBodyCollector(maxFileBytes);
@@ -516,6 +591,9 @@ function startMitmProxy(config) {
 
 		if ((captureRequestBody && captureBodiesForHost) || multipartCapture) {
 			ctx.onRequestData((dataCtx, chunk, cb) => {
+				// requestのボディはストリームで届く（chunkが複数回呼ばれる）。
+				// - requestBody.push: ログ/PII検出用に“上限つき”でバッファする（maxBodyBytesまで）
+				// - multipartCapture.write: Busboyに流して、field/file に分解して保存する
 				try {
 					requestBody.push(chunk);
 					if (multipartCapture) multipartCapture.write(chunk);
@@ -539,6 +617,9 @@ function startMitmProxy(config) {
 
 		if ((captureResponseBody && captureBodiesForHost) || (captureResponseFiles && captureFilesForHost)) {
 			ctx.onResponseData((dataCtx, chunk, cb) => {
+				// responseボディも同様にストリームで届く。
+				// - 画像レスポンスなら file保存候補として responseFileBody に集める
+				// - それ以外は responseTextBody に集めて、後で text/base64 としてログに保存する
 				try {
 					if (responseIsImage && captureResponseFiles && captureFilesForHost) {
 						responseFileBody.push(chunk);
@@ -553,6 +634,7 @@ function startMitmProxy(config) {
 		}
 
 		// ブロック（HTTP/HTTPS共通）
+		// - CONNECT段階で落とすより、HTTPリクエスト段階で403ページを返す方がユーザーに理由が伝わりやすい。
 		if (isBlocked(hostname, config)) {
 			resToClient.writeHead(403, { 'content-type': 'text/html; charset=utf-8' });
 			resToClient.end(`<!doctype html>
@@ -625,6 +707,9 @@ function startMitmProxy(config) {
 
 		// レスポンスがクライアントに返し終わったタイミングでログを確定して保存
 		ctx.onResponseEnd((endCtx, cb) => {
+			// ここで1通信ぶんのデータを確定させ、JSONLに追記する。
+			// - request/response本文はサイズ制限つきで収集され、必要ならデコードしてPII検出に渡す。
+			// - multipart（フォーム/アップロード）や画像レスポンスの保存情報もログに混ぜる。
 			if (shouldLog(hostname, config)) {
 				const reqHeaders = (endCtx.clientToProxyRequest && endCtx.clientToProxyRequest.headers) || headers || {};
 				const reqContentType = reqHeaders['content-type'] || reqHeaders['Content-Type'];
@@ -756,7 +841,7 @@ function startMitmProxy(config) {
 }
 
 function main() {
-	// エントリーポイント: 設定読み込み → ダッシュボード起動 → プロキシ起動
+	// エントリーポイント: 設定読み込み →（ブロックポリシー初期化）→ ダッシュボード起動 → プロキシ起動
 	const config = loadConfig();
 	const blocking = config && config.blocking ? config.blocking : {};
 	const defaultBlockDomains = Array.isArray(blocking.domains) ? blocking.domains : [];

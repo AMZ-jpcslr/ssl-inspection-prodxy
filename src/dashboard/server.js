@@ -1,4 +1,5 @@
 /*
+メモ
 ダッシュボード HTTP サーバ（Express）
 
 このファイルがやること
@@ -7,10 +8,10 @@
 - 画像等の保存ファイル（inspection.fileSaveDir）を `/files` 配下で配信する
 - （有効化されている場合）ログイン/ログアウトとセッションCookie検証で閲覧を保護する
 
-どういう原理で動くか（要点）
-- ダッシュボードは「ログの可視化」専用で、ログの生成はプロキシ本体（`src/main.js`）が行います。
+原理（要点）
+- ダッシュボードは「ログの可視化」専用で、ログの生成はプロキシ本体（`src/main.js`）が行う。
 - 一覧→詳細は “配列index” だけに依存するとログ増加でズレるため、
-	エントリ内容から計算した安定キー（`_dashKey`）でも参照できるようにしています。
+	エントリ内容から計算した安定キー（`_dashKey`）でも参照できるようにしている。
 */
 
 const http = require('node:http');
@@ -37,6 +38,9 @@ const {
 } = require('./render');
 
 function startDashboard(config) {
+	// ダッシュボードは「ログを読む/見せる」だけのサーバ。
+	// - ログの生成はプロキシ本体（src/main.js）が行い、ここはそれを読む。
+	// - 認証が有効なら、ログイン→署名付きCookie→以後検証、で閲覧を保護する。
 	// ログを読み込んで一覧表示するだけの最小UI
 	const app = express();
 	app.disable('x-powered-by');
@@ -69,6 +73,8 @@ function startDashboard(config) {
 	const cookieName = 'dashboard_session';
 
 	function getRemoteAddr(req) {
+		// 監査ログ用に、リクエスト元アドレスを可能な範囲で取る。
+		// - x-forwarded-for はプロキシ/ロードバランサ配下のときに入ることがある。
 		try {
 			const xf = req && req.headers ? req.headers['x-forwarded-for'] : '';
 			if (typeof xf === 'string' && xf) return xf.split(',')[0].trim();
@@ -83,6 +89,8 @@ function startDashboard(config) {
 	}
 
 	function getAuthedUsername(req) {
+		// 「現在ログイン済みか？」を Cookie から判定し、OKならユーザー名を返す。
+		// - authEnabledがfalseなら常に空文字（＝未認証扱い）。
 		if (!authEnabled) return '';
 		if (!sessionSecret || !authPasswordHash) return '';
 		try {
@@ -102,6 +110,8 @@ function startDashboard(config) {
 	}
 
 	function audit(action, req, extra, actorOverride) {
+		// 監査ログは「管理者操作の履歴」。
+		// - login/logout/設定変更など、ダッシュボード側の重要イベントをJSONLに追記する。
 		try {
 			appendAuditJsonl(path.resolve(process.cwd(), auditPath), {
 				timestamp: new Date().toISOString(),
@@ -116,6 +126,7 @@ function startDashboard(config) {
 	}
 
 	function loginPageHtml(message) {
+		// ログインページはテンプレートなしでHTML文字列を組み立てる（MVP）。
 		const msg = message ? `<div style="color:#a00; margin:0 0 12px 0;">${escapeHtml(message)}</div>` : '';
 		return `<!doctype html>
 <html lang="ja">
@@ -148,6 +159,8 @@ function startDashboard(config) {
 	}
 
 	function requireAuth(req, res, next) {
+		// 「認証必須」ガード。
+		// - Cookieが無い/壊れている/期限切れ/署名NG なら /login にリダイレクトする。
 		if (!authEnabled) return next();
 		if (!sessionSecret || !authPasswordHash) {
 			res.statusCode = 500;
@@ -195,12 +208,21 @@ function startDashboard(config) {
 			const exp = Math.floor(Date.now() / 1000) + maxAge;
 			const sig = signDashboardSession(authUsername, exp, sessionSecret);
 			const token = `v1.${authUsername}.${exp}.${sig}`;
+			// Cookieの属性（なぜ必要？）
+			// - HttpOnly: JSから読めないようにしてXSS時の漏えいリスクを下げる
+			// - SameSite=Lax: 外部サイトからの“勝手な送信”（CSRFっぽい動き）を緩和
+			// - Path=/: ダッシュボード配下で有効にする
+			// - Max-Age: 期限（サーバ側のexpとも整合）
+			// 注意: HTTPS前提なら Secure も付けたいが、ローカルMVP用途なので付けていない
 			res.setHeader('set-cookie', `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`);
 			res.statusCode = 302;
 			res.setHeader('location', '/');
 			res.end();
 		});
 
+		// logoutは「Cookieを消す」だけのシンプルな実装。
+		// - クライアントに古いCookieを上書きで消してもらう（Max-Age=0）。
+		// - 期限切れ/署名NGのCookieは requireAuth で弾かれるので、ここでは「正しいCookieが来たときだけ監査ログに残す」ようにしている。
 		app.get('/logout', (req, res) => {
 			audit('logout', req, {});
 			res.setHeader('set-cookie', `${cookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
@@ -215,9 +237,18 @@ function startDashboard(config) {
 		});
 	}
 
+	// 保存済みファイル（アップロード画像/レスポンス画像）を配信する。
+	// - src/main.js が inspection.fileSaveDir 配下に保存したファイルを、リンクで見られるようにする。
+	// - index: false でディレクトリ一覧は出さない（MVPでも“うっかり露出”を減らす）。
 	app.use('/files', express.static(filesAbs, { fallthrough: true, index: false }));
 
 	function findEntryByDashboardIdParam(entries, idParam) {
+		// URLの :id を解釈してログエントリを探す。
+		// - 数字だけなら index として扱う（互換）
+		// - それ以外は computeDashboardEntryKey で作った安定キーとして扱う
+		// なぜ2方式？
+		// - 以前の実装が index 指定だけだと、ログが増えた時に参照がズレる（一覧のN番目が別物になる）。
+		// - 安定キー方式なら「その通信の特徴から作った短いhash」で引けるのでズレにくい。
 		const s = String(idParam || '');
 		if (/^\d+$/.test(s)) {
 			const idx = Number(s);
@@ -231,6 +262,9 @@ function startDashboard(config) {
 	}
 
 	app.get('/', (req, res) => {
+		// 一覧ページ。
+		// - JSONLを末尾N件だけ読み、表示しやすいように並び順を整える。
+		// - ここでは「最新が上」にしたいので reverse() している。
 		const entries = readLastJsonlEntries(logPath, maxEntries);
 		entries.reverse();
 		const forRender = entries.map((e, i) => ({ ...e, _dashId: i, _dashKey: computeDashboardEntryKey(e) }));
@@ -246,6 +280,9 @@ function startDashboard(config) {
 	});
 
 	app.post('/settings/blocking', (req, res) => {
+		// ブロック対象ドメインの更新。
+		// - textarea に1行1ドメインで入力された値を正規化し、policyStoreへ保存する。
+		// - 保存直後からプロキシ側の isBlocked() 判定にも反映される（メモリキャッシュ参照のため）。
 		const raw = req.body && typeof req.body.blockDomains === 'string' ? req.body.blockDomains : '';
 		const next = normalizeDomainList(
 			raw
@@ -268,6 +305,9 @@ function startDashboard(config) {
 	});
 
 	app.get('/audit', (req, res) => {
+		// 監査ログの一覧（誰がいつ何をしたか）。
+		// - UI目的なので末尾N件だけ読む。
+		// - cache-control: no-store でブラウザキャッシュに残りにくくする（監査ログは機微になりうる）。
 		const entries = readLastAuditEntries(path.resolve(process.cwd(), auditPath), maxAuditEntries);
 		entries.reverse();
 		const rows = entries
@@ -332,6 +372,9 @@ function startDashboard(config) {
 	});
 
 	app.get('/entry/:id/body', (req, res) => {
+		// 本文詳細表示ページ。
+		// - 一覧には本文を埋め込まず、別ページで見せる（重い・危険な文字列を扱うため）。
+		// - prefix で request/response のどちらを見るかを選ぶ。
 		const idParam = req.params.id;
 		const prefix =
 			req.query && req.query.prefix === 'request'
@@ -346,6 +389,7 @@ function startDashboard(config) {
 			return;
 		}
 
+		// JSONLから読み込んだ entries は「古い→新しい」の順で返ってくるので、最新が上になるよう reverse。
 		const entries = readLastJsonlEntries(logPath, maxEntries);
 		entries.reverse();
 		const { entry } = findEntryByDashboardIdParam(entries, idParam);
@@ -369,9 +413,12 @@ function startDashboard(config) {
 			.filter(Boolean)
 			.join(' ');
 
+		// ログには「テキストとして保存」か「base64として保存」かのどちらかが入る。
+		// - どちらも無い場合は none。
 		let body = '';
 		if (text) body = text;
 		else if (base64) body = base64;
+		// 表示を重くしないため、ここで“表示用の上限”を適用（ログ自体は別ファイルに残っている想定）。
 		const bodyLimited = truncateForDashboard(body, DASHBOARD_BODY_PAGE_MAX_CHARS);
 
 		res.statusCode = 200;
@@ -400,6 +447,8 @@ function startDashboard(config) {
 	});
 
 	app.get('/entry/:id/pii', (req, res) => {
+		// PII（メール）詳細ページ。
+		// - wantReveal=1 のとき raw 候補も見せられるが、render側で authEnabled を見て制御する。
 		const idParam = req.params.id;
 
 		const entries = readLastJsonlEntries(logPath, maxEntries);
@@ -412,6 +461,7 @@ function startDashboard(config) {
 			return;
 		}
 
+		// revealはクエリパラメータ。true/1 を許容する（手入力でも分かりやすく）。
 		const wantReveal = req.query && (req.query.reveal === '1' || req.query.reveal === 'true');
 
 		res.statusCode = 200;

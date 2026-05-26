@@ -17,12 +17,22 @@
 
 const crypto = require('node:crypto');
 
+// pii.js からメールマスク/検出ロジックをインポート
 const { maskEmail, computeEmailMatchesFromLogEntry } = require('../pii');
 
+// ダッシュボードで表示するログエントリの本文やURLなどを切り詰める上限値
+// 前者がフォームフィールド用、後者がURLや本文用の上限値（両方ともMVPの割り切りで設定）。
+// 単位は文字数（厳密にはUTF-16コードユニット数）。この上限を超えると、ダッシュボードでは切り詰めて表示し、JSONLには全量保存する。
 const DASHBOARD_MAX_FORMFIELDS_CHARS = 2000;
 const DASHBOARD_BODY_PAGE_MAX_CHARS = 200_000;
 
 // HTMLエスケープとダッシュボード用のテキスト処理ロジック
+// 例:<script>のような文字列がタグとして解釈されるのを防ぐ
+// - ユーザー由来文字列（URL/本文/ファイル名など）をHTMLに埋め込むときは必ずエスケープする。
+// どこに効く？
+// - これは「HTMLのテキスト部分」や「HTML属性値」に入れるときの安全化。
+// - URLのクエリパラメータを作るときは `encodeURIComponent()` を使う（目的が違う）。
+//   例: `/entry/${encodeURIComponent(id)}/body?prefix=request`
 function escapeHtml(s) {
 	return String(s)
 		.replaceAll('&', '&amp;')
@@ -32,6 +42,8 @@ function escapeHtml(s) {
 		.replaceAll("'", '&#39;');
 }
 
+// 長い文字列をダッシュボード表示用に切り詰める。
+// - ログ(JSONL)は全量を保存しうるが、UIで全表示すると重いので上限を設ける。
 function truncateForDashboard(s, maxChars) {
 	const limit = Number.isFinite(maxChars) ? Math.max(0, maxChars) : 0;
 	const text = String(s || '');
@@ -40,13 +52,22 @@ function truncateForDashboard(s, maxChars) {
 	return `${text.slice(0, limit)}\n…(truncated in dashboard; full content is in JSONL)`;
 }
 
+// request/response body の「表のセル1個ぶん」のHTMLを作る。
+// - そのまま本文を埋め込まず、「view」リンクで別ページ表示に分離する。
+// - 画像等がファイル保存されている場合は download リンクを表示する。
 function renderBodyCell(entry, prefix, dashId) {
+	// prefix は 'request' / 'response' のどちらか。
+	// - ログ(JSONL)のフィールド名は requestBodyText / responseBodyText のように prefix で分かれているので、
+	//   `${prefix}BodyText` の形で同じロジックを共通化している。
+	// - ここでは「一覧の1セル」に収まるよう、本文の中身ではなく“要約＋リンク”を返す。
 	const bytes = entry && typeof entry[`${prefix}BodyBytes`] === 'number' ? entry[`${prefix}BodyBytes`] : 0;
 	const truncated = Boolean(entry && entry[`${prefix}BodyTruncated`]);
 	const contentType = escapeHtml((entry && entry[`${prefix}ContentType`]) || '');
 	const contentEncoding = escapeHtml((entry && entry[`${prefix}ContentEncoding`]) || '');
 	const charset = escapeHtml((entry && entry[`${prefix}Charset`]) || '');
 
+	// 分岐1: 「ファイルとして保存したかったがスキップした」ケース
+	// - 例: 大きすぎる、書き込みエラー、など。
 	const fileSkipped = Boolean(entry && entry[`${prefix}BodyFileSkipped`]);
 	if (fileSkipped) {
 		const reason = escapeHtml((entry && entry[`${prefix}BodyFileSkipReason`]) || 'skipped');
@@ -57,6 +78,8 @@ function renderBodyCell(entry, prefix, dashId) {
 		return `<span style="color:#444">(file skipped: ${reason}${maxBytes})</span>`;
 	}
 
+	// 分岐2: 本文がファイルとして保存されているケース
+	// - 画像レスポンスやアップロード画像などは、ログにbase64で埋め込むよりファイル保存の方が現実的。
 	const fileUrl = entry && typeof entry[`${prefix}BodyFileUrl`] === 'string' ? entry[`${prefix}BodyFileUrl`] : '';
 	if (fileUrl) {
 		const fileBytes = entry && typeof entry[`${prefix}BodyFileBytes`] === 'number' ? entry[`${prefix}BodyFileBytes`] : bytes;
@@ -64,23 +87,31 @@ function renderBodyCell(entry, prefix, dashId) {
 		const meta = [contentType, charset ? `charset=${charset}` : '', contentEncoding ? `enc=${contentEncoding}` : '']
 			.filter(Boolean)
 			.join(' ');
+		// rel="noopener noreferrer" は target="_blank" のときの安全策（別タブからwindow.opener経由で干渉されるのを避ける）。
 		return `<div>
 			<div><a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">download</a></div>
 			<div style="color:#444">${escapeHtml(summary)}${meta ? ` (${escapeHtml(meta)})` : ''}</div>
 		</div>`;
 	}
 
+    // 分岐3: 本文が直接ログに埋め込まれているケース
+    // - 例: 小さめのテキストレスポンスやリクエストボディなど。
 	const text = entry && typeof entry[`${prefix}BodyText`] === 'string' ? entry[`${prefix}BodyText`] : '';
+
+    // どちらのケースでもない（本文なし）の場合は、(none) 表示にする。
 	const base64 = entry && typeof entry[`${prefix}BodyBase64`] === 'string' ? entry[`${prefix}BodyBase64`] : '';
 	if (!text && !base64) {
 		return `<span style="color:#444">(none)</span>`;
 	}
 
+    // 本文がある場合は、ダッシュボードで表示するための要約とリンクを返す。
 	const kind = text ? 'text' : 'base64';
 	const summary = `${bytes}B${truncated ? '…' : ''} ${kind}`;
 	const meta = [contentType, charset ? `charset=${charset}` : '', contentEncoding ? `enc=${contentEncoding}` : '']
 		.filter(Boolean)
 		.join(' ');
+	// dashId はURLパスの一部になるので encodeURIComponent でURLとして安全な文字列にする。
+	// - HTMLに埋め込む段階では escapeHtml も必要になるが、ここはまずURLを正しく作る。
 	const idPart = dashId === undefined || dashId === null || dashId === '' ? '' : encodeURIComponent(String(dashId));
 	const viewUrl = idPart ? `/entry/${idPart}/body?prefix=${prefix}` : '';
 	return `<div>
@@ -89,6 +120,8 @@ function renderBodyCell(entry, prefix, dashId) {
 	</div>`;
 }
 
+// multipart でアップロードされたファイル一覧（リンク）を表示する。
+// - src/main.js が保存したファイルを /files/... で配信し、そのURLをログに残している。
 function renderUploadedFiles(entry) {
 	if (!entry || !Array.isArray(entry.requestUploadedFiles) || entry.requestUploadedFiles.length === 0) {
 		return '';
@@ -110,6 +143,7 @@ function renderUploadedFiles(entry) {
 	return `<div style="margin-bottom:6px"><div style="color:#444">uploaded files:</div><ul style="margin:4px 0 0 18px">${items}</ul></div>`;
 }
 
+// multipart の補足情報（フォームフィールド/スキップしたファイル/エラー）を details で表示する。
 function renderMultipartMeta(entry) {
 	if (!entry || entry.requestMultipart !== true) return '';
 
@@ -144,6 +178,8 @@ function renderMultipartMeta(entry) {
 	return `${skippedHtml}${errorsHtml}${fieldsHtml}`;
 }
 
+// PII（メール）検出の警告表示（一覧用）。
+// - 検出箇所（url/body/response/form）を簡易表示し、詳細ページへのリンクも付ける。
 function renderPiiWarnings(entry, dashId) {
 	if (!entry || entry.piiEmailDetected !== true) return '';
 	const count = typeof entry.piiEmailCount === 'number' ? entry.piiEmailCount : 1;
@@ -164,7 +200,7 @@ function renderPiiWarnings(entry, dashId) {
 
 function computeDashboardEntryKey(entry) {
 	// Stable-ish key to avoid index drift when new logs arrive.
-	// 
+	// - index指定だけだとログが増えたとき参照がズレるので、エントリ内容から短いhashを作る。
 	try {
 		const payload = JSON.stringify([
 			entry && entry.timestamp ? String(entry.timestamp) : '',
@@ -179,6 +215,9 @@ function computeDashboardEntryKey(entry) {
 	}
 }
 
+// ダッシュボードのメイン一覧HTMLを生成する。
+// - entries は server.js で読み込んだログエントリ配列（最新が先頭になるよう整形済み）。
+// - opts には authEnabled / blockDomains / message などを渡す。
 function renderDashboardHtml(entries, opts) {
 	const options = opts && typeof opts === 'object' ? opts : {};
 	const authEnabled = options.authEnabled === true;
@@ -278,6 +317,9 @@ function renderDashboardHtml(entries, opts) {
 </html>`;
 }
 
+// PII詳細ページ（/entry/:id/pii）のHTMLを生成する。
+// - wantReveal=1 のとき、生の一致候補（raw）も表示する（ただし authEnabled のときだけ）。
+// - 生データはログ保存済みフィールドから再計算する（過去ログもオンデマンド再スキャンできる）。
 function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal }) {
 	const detected = entry && entry.piiEmailDetected === true;
 	const count = typeof entry.piiEmailCount === 'number' ? entry.piiEmailCount : detected ? 1 : 0;

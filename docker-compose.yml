@@ -33,6 +33,9 @@ services:
       - ./data:/app/data
       - ./.http-mitm-proxy:/app/.http-mitm-proxy
       - ./config.json:/app/config.json:ro
+      # Optional: local overrides for secrets (dashboardAuth.passwordHash/sessionSecret)
+      # - Create `config.local.json` on the host (it's .gitignore'd) then restart the container.
+      - ./config.local.json:/app/config.local.json:ro
 
       # Optional: mount additional CA bundle for upstream TLS verification
       # - ./certs:/app/certs:ro

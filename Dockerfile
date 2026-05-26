@@ -11,12 +11,12 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Ensure system CA bundle is present for upstream TLS verification
+# セキュリティのため、必要なパッケージだけをインストールして、キャッシュを削除する。
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 
-# Install deps first for better layer caching
+# プロキシとダッシュボードの依存関係をインストールする。
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

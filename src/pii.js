@@ -10,6 +10,18 @@ PII（個人情報）検出ロジック（プロトタイプ）
 - PII検出は“収集したテキスト”に対して走るため、本文の収集/デコードは `src/httpBody.js` に依存する。
 - 表示時はマスキング（例: `u***@example.com`）し、原文の露出を抑える。
 - JSONLの保存フィールドを情報源に再スキャンできるため、過去ログもUIで再現しやすくしている。
+
+このファイルがどこで使われる？（データの流れ）
+- `buildEmailPiiFields(...)`:
+	- 呼び出し元: `src/main.js` の onResponseEnd
+	- 目的: 1通信ぶんのログに「PII検出フラグ/件数/簡易サンプル」を付与する
+- `computeEmailMatchesFromLogEntry(entry)`:
+	- 呼び出し元: ダッシュボード表示（render.js）
+	- 目的: 古いログでも、保存済みのURL/本文/フォーム情報から“再スキャン”して詳細を見られるようにする
+
+注意（限界）
+- 正規表現でのメール抽出は完全ではない（誤検出/取りこぼしがあり得る）。
+- 本文が「未収集/切り詰め」されている場合、PII検出も不完全になる。
 */
 
 const { URL } = require('node:url');
@@ -22,6 +34,7 @@ const { decodeTextBodyForPii } = require('./httpBody');
 const EMAIL_REGEX = /[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}/gi;
 
 // 文字列の配列から、ユニークなものを大文字小文字を区別せずに最大limit個まで返す
+// - PII候補は同じ値が何度も出るので、重複排除してログ/画面を見やすくする。
 function uniqueStringsLimit(items, limit) {
 	const out = [];
 	const seen = new Set();
@@ -38,9 +51,11 @@ function uniqueStringsLimit(items, limit) {
 }
 
 // テキストからメールアドレスを抽出して、ユニークなものを最大maxMatches個まで返す
+// - 正規表現は「プロトタイプ用」の簡易実装（完璧ではない）。
 function extractEmails(text, maxMatches) {
 	const s = String(text || '');
 	if (!s) return [];
+	// EMAIL_REGEX はグローバルフラグ付きなので lastIndex を毎回リセットする（前回の検索位置が残るため）。
 	const matches = [];
 	let m;
 	EMAIL_REGEX.lastIndex = 0;
@@ -52,6 +67,7 @@ function extractEmails(text, maxMatches) {
 }
 
 // メールアドレスをマスクする例: "user@example.com" -> "u***@example.com"
+// - ダッシュボード一覧では原文を出さず、まずはマスクして“検出された事実”だけ見せる。
 function maskEmail(email) {
 	const s = String(email || '');
 	const at = s.indexOf('@');
@@ -62,17 +78,22 @@ function maskEmail(email) {
 	return `${first}***@${domain}`;
 }
 
+// decodeURIComponent は不正な%エスケープで例外になることがあるので、失敗したら''にする。
 function safeDecodeURIComponent(input) {
 	const s = String(input || '');
 	if (!s) return '';
 	try {
 		return decodeURIComponent(s);
 	} catch {
+		// 不正な %xx が混ざると decodeURIComponent は例外を投げる。
+		// ここで落とすとプロキシ全体のログ処理に影響するので、安全側に倒して''扱いにする。
 		return '';
 	}
 }
 
 // URLやボディ、フォームフィールドなどからメールアドレスを検出してログのフィールドを生成するロジック
+// - ここで返すオブジェクトは、そのままログエントリに Object.assign で混ぜられる想定。
+// - request/response本文のデコードは src/httpBody.js に委譲する（ここでは文字列探索だけ）。
 function buildEmailPiiFields({ url, requestBodyText, requestBodyTruncated, responseBodyText, responseBodyTruncated, formFields }) {
 	const urlCandidates = [];
 	urlCandidates.push(String(url || ''));
@@ -132,6 +153,9 @@ function buildEmailPiiFields({ url, requestBodyText, requestBodyTruncated, respo
 	};
 }
 
+// ログエントリ（JSONLの1行）から、後からメール候補を再抽出する。
+// - ダッシュボードで「詳細ページを開いた時」などに、保存済みフィールドから再スキャンできる。
+// - request/response本文は text が無ければ base64 を復元→decodeTextBodyForPii で文字列化を試みる。
 function computeEmailMatchesFromLogEntry(entry) {
 	if (!entry) return [];
 	const parts = [];
@@ -154,6 +178,8 @@ function computeEmailMatchesFromLogEntry(entry) {
 			}
 			const base64 = entry[base64Key];
 			if (typeof base64 === 'string' && base64) {
+				// base64をいったんバイト列に戻し、Content-Type/Encoding を頼りにテキスト化を試みる。
+				// - 画像などは decodeTextBodyForPii が '' を返す想定。
 				const buf = Buffer.from(base64, 'base64');
 				const decoded = decodeTextBodyForPii(buf, entry[ctKey] || '', entry[encKey] || '');
 				if (decoded) parts.push(decoded);
