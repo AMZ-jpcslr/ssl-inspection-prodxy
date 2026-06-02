@@ -46,7 +46,7 @@ const { loadConfig } = require('./config');
 const { appendJsonl } = require('./logStore');
 const { startDashboard } = require('./dashboard/server');
 const { parseContentType, isTextLikeMime, looksBinary, decodeTextBodyForPii } = require('./httpBody');
-const { buildEmailPiiFields } = require('./pii');
+const { buildEmailPiiFields, buildCardPiiFields } = require('./pii');
 const { configurePolicyStore, getBlockDomains } = require('./policyStore');
 
 // このプロトタイプがやること（ざっくり）
@@ -710,52 +710,86 @@ function startMitmProxy(config) {
 			// ここで1通信ぶんのデータを確定させ、JSONLに追記する。
 			// - request/response本文はサイズ制限つきで収集され、必要ならデコードしてPII検出に渡す。
 			// - multipart（フォーム/アップロード）や画像レスポンスの保存情報もログに混ぜる。
+			const reqHeaders = (endCtx.clientToProxyRequest && endCtx.clientToProxyRequest.headers) || headers || {};
+			const reqContentType = reqHeaders['content-type'] || reqHeaders['Content-Type'];
+			const reqContentEncoding = reqHeaders['content-encoding'] || reqHeaders['Content-Encoding'];
+			const resContentType = responseHeaders['content-type'] || responseHeaders['Content-Type'];
+			const resContentEncoding = responseHeaders['content-encoding'] || responseHeaders['Content-Encoding'];
+
+			let requestBodyTextForPii = '';
+			let requestBodyTruncatedForPii = false;
+			try {
+				const meta = requestBody.getMeta();
+				requestBodyTruncatedForPii = Boolean(meta && meta.truncated);
+				const buf = requestBody.getBuffer();
+				if (buf && buf.length > 0) requestBodyTextForPii = decodeTextBodyForPii(buf, reqContentType, reqContentEncoding);
+			} catch {
+				requestBodyTextForPii = '';
+				requestBodyTruncatedForPii = false;
+			}
+
+			let responseBodyTextForPii = '';
+			let responseBodyTruncatedForPii = false;
+			try {
+				const canUseTextBody =
+					captureResponseBody &&
+					captureBodiesForHost &&
+					!(responseIsImage && captureResponseFiles && captureFilesForHost);
+				if (canUseTextBody) {
+					const meta = responseTextBody.getMeta();
+					responseBodyTruncatedForPii = Boolean(meta && meta.truncated);
+					const buf = responseTextBody.getBuffer();
+					if (buf && buf.length > 0) responseBodyTextForPii = decodeTextBodyForPii(buf, resContentType, resContentEncoding);
+				}
+			} catch {
+				responseBodyTextForPii = '';
+				responseBodyTruncatedForPii = false;
+			}
+
+			const piiEmailFields = buildEmailPiiFields({
+				url: fullUrl,
+				requestBodyText: requestBodyTextForPii,
+				requestBodyTruncated: requestBodyTruncatedForPii,
+				responseBodyText: responseBodyTextForPii,
+				responseBodyTruncated: responseBodyTruncatedForPii,
+				formFields: multipartCapture ? multipartCapture.state.fields : null,
+			});
+			const piiCardFields = buildCardPiiFields({
+				url: fullUrl,
+				requestBodyText: requestBodyTextForPii,
+				requestBodyTruncated: requestBodyTruncatedForPii,
+				responseBodyText: responseBodyTextForPii,
+				responseBodyTruncated: responseBodyTruncatedForPii,
+				formFields: multipartCapture ? multipartCapture.state.fields : null,
+			});
+
+			// Emit a warning without leaking raw URLs or digits.
+			if (piiCardFields && piiCardFields.piiCardDetected === true) {
+				try {
+					const where = [
+						piiCardFields.piiCardInUrl ? 'url' : '',
+						piiCardFields.piiCardInRequestBody ? 'request-body' : '',
+						piiCardFields.piiCardInResponse ? 'response' : '',
+						piiCardFields.piiCardInFormFields ? 'form' : '',
+					]
+						.filter(Boolean)
+						.join(',');
+					const urlHash = crypto
+						.createHash('sha256')
+						.update(String(fullUrl || ''))
+						.digest('hex')
+						.slice(0, 16);
+					const samples = Array.isArray(piiCardFields.piiCardSamples) ? piiCardFields.piiCardSamples : [];
+					console.warn(
+						`PII(card) detected host=${hostname} method=${method} status=${String(responseStatusCode || '')} where=${where} urlHash=${urlHash} samples=${JSON.stringify(samples)}`
+					);
+				} catch {
+					// ignore
+				}
+			}
+
 			if (shouldLog(hostname, config)) {
-				const reqHeaders = (endCtx.clientToProxyRequest && endCtx.clientToProxyRequest.headers) || headers || {};
-				const reqContentType = reqHeaders['content-type'] || reqHeaders['Content-Type'];
-				const reqContentEncoding = reqHeaders['content-encoding'] || reqHeaders['Content-Encoding'];
-				const resContentType = responseHeaders['content-type'] || responseHeaders['Content-Type'];
-				const resContentEncoding = responseHeaders['content-encoding'] || responseHeaders['Content-Encoding'];
-
-				let requestBodyTextForPii = '';
-				let requestBodyTruncatedForPii = false;
-				try {
-					const meta = requestBody.getMeta();
-					requestBodyTruncatedForPii = Boolean(meta && meta.truncated);
-					const buf = requestBody.getBuffer();
-					if (buf && buf.length > 0) requestBodyTextForPii = decodeTextBodyForPii(buf, reqContentType, reqContentEncoding);
-				} catch {
-					requestBodyTextForPii = '';
-					requestBodyTruncatedForPii = false;
-				}
-
-				let responseBodyTextForPii = '';
-				let responseBodyTruncatedForPii = false;
-				try {
-					const canUseTextBody =
-						captureResponseBody &&
-						captureBodiesForHost &&
-						!(responseIsImage && captureResponseFiles && captureFilesForHost);
-					if (canUseTextBody) {
-						const meta = responseTextBody.getMeta();
-						responseBodyTruncatedForPii = Boolean(meta && meta.truncated);
-						const buf = responseTextBody.getBuffer();
-						if (buf && buf.length > 0) responseBodyTextForPii = decodeTextBodyForPii(buf, resContentType, resContentEncoding);
-					}
-				} catch {
-					responseBodyTextForPii = '';
-					responseBodyTruncatedForPii = false;
-				}
-
-				const piiFields = buildEmailPiiFields({
-					url: fullUrl,
-					requestBodyText: requestBodyTextForPii,
-					requestBodyTruncated: requestBodyTruncatedForPii,
-					responseBodyText: responseBodyTextForPii,
-					responseBodyTruncated: responseBodyTruncatedForPii,
-					formFields: multipartCapture ? multipartCapture.state.fields : null,
-				});
-
+				const piiFields = Object.assign({}, piiEmailFields, piiCardFields);
 				let responseFileFields = {};
 				if (responseIsImage && captureResponseFiles && captureFilesForHost) {
 					const meta = responseFileBody.getMeta();
