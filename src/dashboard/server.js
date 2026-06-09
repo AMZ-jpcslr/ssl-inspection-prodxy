@@ -261,19 +261,85 @@ function startDashboard(config) {
 		return { entry: undefined, index: -1 };
 	}
 
+	function firstQueryValue(value) {
+		if (Array.isArray(value)) return value.length > 0 ? String(value[0] || '') : '';
+		return value === undefined || value === null ? '' : String(value);
+	}
+
+	function parseLogFilters(query) {
+		const q = firstQueryValue(query && query.q).trim();
+		const domain = firstQueryValue(query && query.domain).trim().toLowerCase();
+		const method = firstQueryValue(query && query.method).trim().toUpperCase();
+		const status = firstQueryValue(query && query.status).trim();
+		return {
+			q,
+			domain,
+			method,
+			status,
+			onlyPii: firstQueryValue(query && query.pii) === '1',
+			onlyBlocked: firstQueryValue(query && query.blocked) === '1',
+			onlyFiles: firstQueryValue(query && query.files) === '1',
+		};
+	}
+
+	function entryHasFile(entry) {
+		if (!entry) return false;
+		if (typeof entry.requestBodyFileUrl === 'string' && entry.requestBodyFileUrl) return true;
+		if (typeof entry.responseBodyFileUrl === 'string' && entry.responseBodyFileUrl) return true;
+		if (Array.isArray(entry.requestUploadedFiles) && entry.requestUploadedFiles.length > 0) return true;
+		return false;
+	}
+
+	function entryMatchesFilters(entry, filters) {
+		if (!entry) return false;
+		const f = filters && typeof filters === 'object' ? filters : {};
+		const domain = String(entry.domain || '').toLowerCase();
+		const url = String(entry.URL || '').toLowerCase();
+		const method = String(entry.method || '').toUpperCase();
+		const status = String(entry.status === undefined || entry.status === null ? '' : entry.status);
+		const pii = entry.piiEmailDetected === true || entry.piiCardDetected === true;
+
+		if (f.q) {
+			const needle = String(f.q).toLowerCase();
+			const haystack = [
+				entry.timestamp,
+				entry.domain,
+				entry.URL,
+				entry.method,
+				entry.status,
+				entry.requestContentType,
+				entry.responseContentType,
+			]
+				.map((v) => String(v === undefined || v === null ? '' : v).toLowerCase())
+				.join('\n');
+			if (!haystack.includes(needle)) return false;
+		}
+		if (f.domain && !domain.includes(f.domain) && !url.includes(f.domain)) return false;
+		if (f.method && method !== f.method) return false;
+		if (f.status && !status.startsWith(f.status)) return false;
+		if (f.onlyPii && !pii) return false;
+		if (f.onlyBlocked && entry.blocked !== true) return false;
+		if (f.onlyFiles && !entryHasFile(entry)) return false;
+		return true;
+	}
+
 	app.get('/', (req, res) => {
 		// 一覧ページ。
 		// - JSONLを末尾N件だけ読み、表示しやすいように並び順を整える。
 		// - ここでは「最新が上」にしたいので reverse() している。
 		const entries = readLastJsonlEntries(logPath, maxEntries);
 		entries.reverse();
-		const forRender = entries.map((e, i) => ({ ...e, _dashId: i, _dashKey: computeDashboardEntryKey(e) }));
+		const allForRender = entries.map((e, i) => ({ ...e, _dashId: i, _dashKey: computeDashboardEntryKey(e) }));
+		const filters = parseLogFilters(req.query || {});
+		const forRender = allForRender.filter((entry) => entryMatchesFilters(entry, filters));
 		res.setHeader('content-type', 'text/html; charset=utf-8');
 		const message = req.query && typeof req.query.msg === 'string' ? req.query.msg : '';
 		res.end(
 			renderDashboardHtml(forRender, {
 				authEnabled,
 				blockDomains: getBlockDomains(),
+				filters,
+				totalEntries: allForRender.length,
 				message,
 			})
 		);

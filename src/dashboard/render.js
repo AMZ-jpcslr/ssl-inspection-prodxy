@@ -244,6 +244,11 @@ function computeDashboardEntryKey(entry) {
 	}
 }
 
+function hasActiveLogFilters(filters) {
+	const f = filters && typeof filters === 'object' ? filters : {};
+	return Boolean(f.q || f.domain || f.method || f.status || f.onlyPii || f.onlyBlocked || f.onlyFiles);
+}
+
 // ダッシュボードのメイン一覧HTMLを生成する。
 // - entries は server.js で読み込んだログエントリ配列（最新が先頭になるよう整形済み）。
 // - opts には authEnabled / blockDomains / message などを渡す。
@@ -252,6 +257,9 @@ function renderDashboardHtml(entries, opts) {
 	const authEnabled = options.authEnabled === true;
 	const message = typeof options.message === 'string' ? options.message : '';
 	const blockDomains = Array.isArray(options.blockDomains) ? options.blockDomains : [];
+	const filters = options.filters && typeof options.filters === 'object' ? options.filters : {};
+	const totalEntries = Number.isFinite(options.totalEntries) ? options.totalEntries : entries.length;
+	const hasFilters = hasActiveLogFilters(filters);
 	const blocklistText = blockDomains.join('\n');
 	const messageHtml = message
 		? `<div class="meta" style="color:#060">${escapeHtml(message)}</div>`
@@ -273,6 +281,53 @@ function renderDashboardHtml(entries, opts) {
 			<div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
 				<button type="submit">save</button>
 				<span style="color:#444">Current count: ${escapeHtml(String(blockDomains.length))}</span>
+			</div>
+		</form>
+	</div>`;
+
+	const methodOptions = ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'CONNECT', 'OPTIONS', 'HEAD']
+		.map((m) => {
+			const selected = String(filters.method || '') === m ? ' selected' : '';
+			return `<option value="${escapeHtml(m)}"${selected}>${escapeHtml(m || 'any method')}</option>`;
+		})
+		.join('');
+
+	const filterPanelHtml = `<div class="card">
+		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
+			<div style="font-weight:600">Filters</div>
+			${hasFilters ? `<a href="/">clear filters</a>` : ''}
+		</div>
+		<form method="get" action="/" class="filter-grid" style="margin-top:10px;">
+			<label>
+				<span>keyword</span>
+				<input name="q" value="${escapeHtml(filters.q || '')}" placeholder="URL, domain, content-type" />
+			</label>
+			<label>
+				<span>domain</span>
+				<input name="domain" value="${escapeHtml(filters.domain || '')}" placeholder="example.com" />
+			</label>
+			<label>
+				<span>method</span>
+				<select name="method">${methodOptions}</select>
+			</label>
+			<label>
+				<span>status</span>
+				<input name="status" value="${escapeHtml(filters.status || '')}" placeholder="200 / 4 / 403" />
+			</label>
+			<label class="check">
+				<input type="checkbox" name="pii" value="1"${filters.onlyPii ? ' checked' : ''} />
+				<span>PII only</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" name="blocked" value="1"${filters.onlyBlocked ? ' checked' : ''} />
+				<span>blocked only</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" name="files" value="1"${filters.onlyFiles ? ' checked' : ''} />
+				<span>files only</span>
+			</label>
+			<div style="display:flex; align-items:end;">
+				<button type="submit">apply</button>
 			</div>
 		</form>
 	</div>`;
@@ -312,6 +367,12 @@ function renderDashboardHtml(entries, opts) {
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
+			input, select { padding: 7px; box-sizing: border-box; }
+			label span { display: block; margin-bottom: 4px; color: #444; }
+			.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+			.filter-grid label input, .filter-grid label select { width: 100%; }
+			.filter-grid .check { display: flex; gap: 6px; align-items: center; padding-bottom: 8px; }
+			.filter-grid .check span { display: inline; margin: 0; color: #222; }
 			textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 			table { width: 100%; border-collapse: collapse; }
 			th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
@@ -324,8 +385,9 @@ function renderDashboardHtml(entries, opts) {
 	</head>
 	<body>
 		${adminPanelHtml}
+		${filterPanelHtml}
 		${messageHtml}
-		<p class="meta">最新 ${entries.length} 件（更新はリロード）</p>
+		<p class="meta">最新 ${escapeHtml(String(totalEntries))} 件中 ${escapeHtml(String(entries.length))} 件を表示（更新はリロード）</p>
 		<table>
 			<thead>
 				<tr>
