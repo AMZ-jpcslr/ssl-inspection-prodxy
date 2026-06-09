@@ -14,12 +14,13 @@
 	エントリ内容から計算した安定キー（`_dashKey`）でも参照できるようにしている。
 */
 
+const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 
 const express = require('express');
 
-const { readLastJsonlEntries } = require('../logStore');
+const { clearJsonl, readLastJsonlEntries } = require('../logStore');
 const { appendAuditJsonl, readLastAuditEntries } = require('../auditStore');
 const {
 	configurePolicyStore,
@@ -27,7 +28,14 @@ const {
 	setBlockDomains,
 	normalizeDomainList,
 } = require('../policyStore');
-const { parseCookies, signDashboardSession, verifyDashboardSession, verifyScryptPassword } = require('./auth');
+const {
+	createScryptPasswordHash,
+	generateSessionSecret,
+	parseCookies,
+	signDashboardSession,
+	verifyDashboardSession,
+	verifyScryptPassword,
+} = require('./auth');
 const {
 	escapeHtml,
 	truncateForDashboard,
@@ -71,6 +79,97 @@ function startDashboard(config) {
 	const sessionSecret = typeof dashboardAuth.sessionSecret === 'string' ? dashboardAuth.sessionSecret : '';
 	const sessionTtlSeconds = Number.isFinite(dashboardAuth.sessionTtlSeconds) ? dashboardAuth.sessionTtlSeconds : 60 * 60 * 8;
 	const cookieName = 'dashboard_session';
+	const setupRequired = authEnabled && !isDashboardAuthConfigured();
+
+	function isDashboardAuthConfigured() {
+		return Boolean(
+			dashboardAuth &&
+				dashboardAuth.passwordHash &&
+				dashboardAuth.passwordHash.saltBase64 &&
+				dashboardAuth.passwordHash.hashBase64 &&
+				sessionSecret
+		);
+	}
+
+	function csrfTokenForUser(username) {
+		if (!authEnabled || !sessionSecret || !username) return '';
+		return signDashboardSession(`csrf:${username}`, 4102444800, sessionSecret);
+	}
+
+	function verifyCsrf(req) {
+		if (!authEnabled) return true;
+		const username = getAuthedUsername(req);
+		if (!username) return false;
+		const token = req.body && typeof req.body.csrfToken === 'string' ? req.body.csrfToken : '';
+		return token && token === csrfTokenForUser(username);
+	}
+
+	function requireCsrf(req, res, next) {
+		if (verifyCsrf(req)) return next();
+		res.statusCode = 403;
+		res.setHeader('content-type', 'text/plain; charset=utf-8');
+		res.end('Invalid CSRF token');
+	}
+
+	function canWriteFilePath(filePath) {
+		try {
+			const abs = path.resolve(process.cwd(), filePath);
+			fs.mkdirSync(path.dirname(abs), { recursive: true });
+			fs.accessSync(path.dirname(abs), fs.constants.W_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	function canWriteDir(dirPath) {
+		try {
+			const abs = path.resolve(process.cwd(), dirPath);
+			fs.mkdirSync(abs, { recursive: true });
+			fs.accessSync(abs, fs.constants.W_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	function buildHealthStatus() {
+		const caPath = path.resolve(process.cwd(), '.http-mitm-proxy/certs/ca.pem');
+		const bodyDomains = inspection && Array.isArray(inspection.bodyCaptureDomains) ? inspection.bodyCaptureDomains : [];
+		const fileDomains = inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [];
+		return [
+			{
+				label: 'Dashboard auth',
+				ok: !authEnabled || isDashboardAuthConfigured(),
+				detail: authEnabled ? (isDashboardAuthConfigured() ? 'configured' : 'setup required') : 'disabled',
+			},
+			{
+				label: 'Local CA',
+				ok: fs.existsSync(caPath),
+				detail: fs.existsSync(caPath) ? '.http-mitm-proxy/certs/ca.pem' : 'created after first HTTPS use',
+			},
+			{
+				label: 'Access log',
+				ok: canWriteFilePath(logPath),
+				detail: logPath,
+			},
+			{
+				label: 'Saved files',
+				ok: canWriteDir(fileSaveDir),
+				detail: fileSaveDir,
+			},
+			{
+				label: 'Body capture scope',
+				ok: bodyDomains.length > 0,
+				detail: bodyDomains.length > 0 ? bodyDomains.join(', ') : 'all domains',
+			},
+			{
+				label: 'File capture scope',
+				ok: fileDomains.length > 0,
+				detail: fileDomains.length > 0 ? fileDomains.join(', ') : 'all domains',
+			},
+		];
+	}
 
 	function getRemoteAddr(req) {
 		// 監査ログ用に、リクエスト元アドレスを可能な範囲で取る。
@@ -158,14 +257,71 @@ function startDashboard(config) {
 </html>`;
 	}
 
+	function setupPageHtml(message) {
+		const msg = message ? `<div style="color:#a00; margin:0 0 12px 0;">${escapeHtml(message)}</div>` : '';
+		return `<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Initial Setup</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+			.card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+			label { display: block; margin-top: 10px; }
+			input { width: 100%; padding: 8px; box-sizing: border-box; }
+			button { margin-top: 14px; padding: 10px 12px; }
+			.meta { color:#444; line-height: 1.5; }
+		</style>
+	</head>
+	<body>
+		<div class="card">
+			<h1 style="font-size:18px; margin: 0 0 10px 0;">Initial Dashboard Setup</h1>
+			<p class="meta">管理画面のパスワードを作成します。秘密情報は Git 管理外の <code>config.local.json</code> に保存されます。</p>
+			${msg}
+			<form method="post" action="/setup">
+				<label>username</label>
+				<input name="username" value="${escapeHtml(authUsername)}" autocomplete="username" />
+				<label>password</label>
+				<input name="password" type="password" autocomplete="new-password" />
+				<label>confirm password</label>
+				<input name="passwordConfirm" type="password" autocomplete="new-password" />
+				<button type="submit">create admin account</button>
+			</form>
+		</div>
+	</body>
+</html>`;
+	}
+
+	function writeLocalDashboardAuth(username, password) {
+		const localConfigPath = path.resolve(process.cwd(), 'config.local.json');
+		let localConfig = {};
+		try {
+			if (fs.existsSync(localConfigPath) && fs.statSync(localConfigPath).isFile()) {
+				localConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+			}
+		} catch {
+			localConfig = {};
+		}
+		localConfig.dashboardAuth = {
+			...(localConfig.dashboardAuth && typeof localConfig.dashboardAuth === 'object' ? localConfig.dashboardAuth : {}),
+			enabled: true,
+			username,
+			passwordHash: createScryptPasswordHash(password),
+			sessionSecret: generateSessionSecret(),
+			sessionTtlSeconds,
+		};
+		fs.writeFileSync(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`, 'utf8');
+	}
+
 	function requireAuth(req, res, next) {
 		// 「認証必須」ガード。
 		// - Cookieが無い/壊れている/期限切れ/署名NG なら /login にリダイレクトする。
 		if (!authEnabled) return next();
-		if (!sessionSecret || !authPasswordHash) {
-			res.statusCode = 500;
-			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Dashboard auth is enabled but not configured (missing sessionSecret/passwordHash).');
+		if (setupRequired) {
+			res.statusCode = 302;
+			res.setHeader('location', '/setup');
+			res.end();
 			return;
 		}
 		const cookies = parseCookies(req.headers.cookie);
@@ -187,14 +343,96 @@ function startDashboard(config) {
 	}
 
 	if (authEnabled) {
+		app.get('/setup', (req, res) => {
+			res.setHeader('cache-control', 'no-store');
+			res.setHeader('content-type', 'text/html; charset=utf-8');
+			if (!setupRequired) {
+				res.statusCode = 302;
+				res.setHeader('location', '/login');
+				res.end();
+				return;
+			}
+			res.end(setupPageHtml(''));
+		});
+
+		app.post('/setup', (req, res) => {
+			res.setHeader('cache-control', 'no-store');
+			if (!setupRequired) {
+				res.statusCode = 302;
+				res.setHeader('location', '/login');
+				res.end();
+				return;
+			}
+			const username = req.body && typeof req.body.username === 'string' && req.body.username.trim()
+				? req.body.username.trim()
+				: 'admin';
+			const password = req.body && typeof req.body.password === 'string' ? req.body.password : '';
+			const passwordConfirm = req.body && typeof req.body.passwordConfirm === 'string' ? req.body.passwordConfirm : '';
+			if (password.length < 8) {
+				res.statusCode = 400;
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.end(setupPageHtml('Password must be at least 8 characters.'));
+				return;
+			}
+			if (password !== passwordConfirm) {
+				res.statusCode = 400;
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.end(setupPageHtml('Passwords do not match.'));
+				return;
+			}
+			try {
+				writeLocalDashboardAuth(username, password);
+				audit('initial_setup', req, { username }, username);
+				res.statusCode = 200;
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.end(`<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Setup Complete</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+			.card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+			code { background:#f5f5f5; padding:2px 6px; border-radius:4px; }
+		</style>
+	</head>
+	<body>
+		<div class="card">
+			<h1 style="font-size:18px; margin: 0 0 10px 0;">Setup complete</h1>
+			<p><code>config.local.json</code> を作成しました。</p>
+			<p>一度プロキシを再起動してから、<a href="/login">ログイン画面</a>を開いてください。</p>
+		</div>
+	</body>
+</html>`);
+			} catch (e) {
+				res.statusCode = 500;
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.end(setupPageHtml(`Failed to write config.local.json: ${e && e.message ? e.message : String(e)}`));
+			}
+		});
+
 		app.get('/login', (req, res) => {
 			res.setHeader('cache-control', 'no-store');
 			res.setHeader('content-type', 'text/html; charset=utf-8');
-			res.end(loginPageHtml(''));
+			if (setupRequired) {
+				res.statusCode = 302;
+				res.setHeader('location', '/setup');
+				res.end();
+				return;
+			}
+			const message = req.query && req.query.setup === 'complete' ? 'Setup complete. Please log in.' : '';
+			res.end(loginPageHtml(message));
 		});
 
 		app.post('/login', (req, res) => {
 			res.setHeader('cache-control', 'no-store');
+			if (setupRequired) {
+				res.statusCode = 302;
+				res.setHeader('location', '/setup');
+				res.end();
+				return;
+			}
 			const username = req.body && typeof req.body.username === 'string' ? req.body.username : '';
 			const password = req.body && typeof req.body.password === 'string' ? req.body.password : '';
 			if (username !== authUsername || !verifyScryptPassword(password, authPasswordHash)) {
@@ -232,7 +470,7 @@ function startDashboard(config) {
 		});
 
 		app.use((req, res, next) => {
-			if (req.path === '/login' || req.path === '/logout') return next();
+			if (req.path === '/setup' || req.path === '/login' || req.path === '/logout') return next();
 			return requireAuth(req, res, next);
 		});
 	}
@@ -340,12 +578,14 @@ function startDashboard(config) {
 				blockDomains: getBlockDomains(),
 				filters,
 				totalEntries: allForRender.length,
+				csrfToken: csrfTokenForUser(getAuthedUsername(req)),
+				healthStatus: buildHealthStatus(),
 				message,
 			})
 		);
 	});
 
-	app.post('/settings/blocking', (req, res) => {
+	app.post('/settings/blocking', requireCsrf, (req, res) => {
 		// ブロック対象ドメインの更新。
 		// - textarea に1行1ドメインで入力された値を正規化し、policyStoreへ保存する。
 		// - 保存直後からプロキシ側の isBlocked() 判定にも反映される（メモリキャッシュ参照のため）。
@@ -368,6 +608,20 @@ function startDashboard(config) {
 		res.statusCode = 302;
 		res.setHeader('location', '/?msg=blocklist%20updated');
 		res.end();
+	});
+
+	app.post('/settings/logs/clear', requireCsrf, (req, res) => {
+		try {
+			clearJsonl(logPath);
+			audit('clear_access_log', req, { path: logPath });
+			res.statusCode = 302;
+			res.setHeader('location', '/?msg=access%20log%20cleared');
+			res.end();
+		} catch (e) {
+			res.statusCode = 500;
+			res.setHeader('content-type', 'text/plain; charset=utf-8');
+			res.end(`Failed to clear access log: ${e && e.message ? e.message : String(e)}`);
+		}
 	});
 
 	app.get('/audit', (req, res) => {
