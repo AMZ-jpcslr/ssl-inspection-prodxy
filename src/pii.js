@@ -40,6 +40,13 @@ const EMAIL_REGEX = /[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}/gi;
 // ============================================================
 const CARD_CANDIDATE_REGEX = /[0-9][0-9 \-]{11,30}[0-9]/g;
 
+// ============================================================
+// PII detection: Japanese phone number like detection (best-effort)
+// - Examples: 090-1234-5678, 03-1234-5678, 0120-123-456, +81-90-1234-5678
+// - This is heuristic; false positives/negatives are possible.
+// ============================================================
+const PHONE_CANDIDATE_REGEX = /(?:\+81[-\s]?(?:\(0\)[-\s]?)?|0)\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}/g;
+
 // 文字列の配列から、ユニークなものを大文字小文字を区別せずに最大limit個まで返す
 // - PII候補は同じ値が何度も出るので、重複排除してログ/画面を見やすくする。
 function uniqueStringsLimit(items, limit) {
@@ -164,6 +171,53 @@ function extractCardNumbers(text, maxMatches) {
 	return uniqueStringsLimit(matches, maxMatches);
 }
 
+function normalizeJapanesePhoneNumber(raw) {
+	let s = String(raw || '').trim();
+	if (!s) return '';
+	s = s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+	s = s.replace(/\(0\)/g, '');
+	s = s.replace(/[^\d+]/g, '');
+	if (s.startsWith('+81')) {
+		s = `0${s.slice(3)}`;
+	}
+	if (!/^\d+$/.test(s)) return '';
+	if (!s.startsWith('0')) return '';
+	if (s.length < 10 || s.length > 11) return '';
+	return s;
+}
+
+function isLikelyJapanesePhoneNumber(digits) {
+	const s = String(digits || '');
+	if (!/^0\d{9,10}$/.test(s)) return false;
+	if (/^0+$/.test(s)) return false;
+
+	// Mobile/PHS numbers: 070/080/090 + 8 digits.
+	if (/^0[789]0\d{8}$/.test(s)) return true;
+
+	// Toll-free/navigation/premium-ish service numbers commonly seen in Japan.
+	if (/^0(120|800|570|990)\d{6}$/.test(s)) return true;
+
+	// Landline/IP phone: 0 + area/provider prefix, total 10 digits.
+	if (s.length === 10 && /^0[1-9]\d{8}$/.test(s)) return true;
+
+	return false;
+}
+
+function extractPhoneNumbers(text, maxMatches) {
+	const s = String(text || '');
+	if (!s) return [];
+	const matches = [];
+	let m;
+	PHONE_CANDIDATE_REGEX.lastIndex = 0;
+	while ((m = PHONE_CANDIDATE_REGEX.exec(s))) {
+		const digits = normalizeJapanesePhoneNumber(m[0]);
+		if (!isLikelyJapanesePhoneNumber(digits)) continue;
+		matches.push(digits);
+		if (matches.length >= maxMatches) break;
+	}
+	return uniqueStringsLimit(matches, maxMatches);
+}
+
 function maskCardNumber(cardDigits) {
 	const d = String(cardDigits || '').replace(/\D+/g, '');
 	if (d.length < 4) return '(card)';
@@ -174,6 +228,13 @@ function maskCardNumber(cardDigits) {
 		groups.push(masked.slice(i, i + 4));
 	}
 	return groups.join(' ').trim();
+}
+
+function maskPhoneNumber(phoneDigits) {
+	const d = String(phoneDigits || '').replace(/\D+/g, '');
+	if (d.length < 4) return '(phone)';
+	const last4 = d.slice(-4);
+	return `${d.slice(0, 3)}-****-${last4}`;
 }
 
 // メールアドレスをマスクする例: "user@example.com" -> "u***@example.com"
@@ -342,6 +403,63 @@ function buildCardPiiFields({ url, requestBodyText, requestBodyTruncated, respon
 	};
 }
 
+function buildPhonePiiFields({ url, requestBodyText, requestBodyTruncated, responseBodyText, responseBodyTruncated, formFields }) {
+	const urlCandidates = [];
+	urlCandidates.push(String(url || ''));
+	const decodedUrl = safeDecodeURIComponent(url);
+	if (decodedUrl && decodedUrl !== url) urlCandidates.push(decodedUrl);
+	try {
+		const u = new URL(String(url || ''));
+		for (const v of u.searchParams.values()) {
+			urlCandidates.push(v);
+		}
+	} catch {
+		// ignore
+	}
+	const urlMatches = extractPhoneNumbers(urlCandidates.join('\n'), 20);
+
+	const requestBodyCandidates = [];
+	requestBodyCandidates.push(String(requestBodyText || ''));
+	const decodedRequestBody = safeDecodeURIComponent(requestBodyText);
+	if (decodedRequestBody && decodedRequestBody !== requestBodyText) requestBodyCandidates.push(decodedRequestBody);
+	const requestBodyMatches = extractPhoneNumbers(requestBodyCandidates.join('\n'), 20);
+
+	const responseBodyCandidates = [];
+	responseBodyCandidates.push(String(responseBodyText || ''));
+	const decodedResponseBody = safeDecodeURIComponent(responseBodyText);
+	if (decodedResponseBody && decodedResponseBody !== responseBodyText) responseBodyCandidates.push(decodedResponseBody);
+	const responseBodyMatches = extractPhoneNumbers(responseBodyCandidates.join('\n'), 20);
+
+	let fieldMatches = [];
+	try {
+		if (formFields && typeof formFields === 'object') {
+			const rawFields = JSON.stringify(formFields);
+			const decodedFields = safeDecodeURIComponent(rawFields);
+			fieldMatches = extractPhoneNumbers([rawFields, decodedFields].filter(Boolean).join('\n'), 20);
+		}
+	} catch {
+		fieldMatches = [];
+	}
+
+	const all = uniqueStringsLimit([...urlMatches, ...requestBodyMatches, ...responseBodyMatches, ...fieldMatches], 20);
+	if (all.length === 0) return {};
+
+	return {
+		piiPhoneDetected: true,
+		piiPhoneCount: all.length,
+		piiPhoneSamples: all.slice(0, 5).map(maskPhoneNumber),
+		piiPhoneInUrl: urlMatches.length > 0,
+		// Backward compatible shape: "InBody" refers to request body.
+		piiPhoneInBody: requestBodyMatches.length > 0,
+		piiPhoneInRequestBody: requestBodyMatches.length > 0,
+		piiPhoneInResponse: responseBodyMatches.length > 0,
+		piiPhoneInFormFields: fieldMatches.length > 0,
+		piiPhoneBodyTruncated: Boolean(requestBodyTruncated),
+		piiPhoneRequestBodyTruncated: Boolean(requestBodyTruncated),
+		piiPhoneResponseBodyTruncated: Boolean(responseBodyTruncated),
+	};
+}
+
 // ログエントリ（JSONLの1行）から、後からカード番号候補（digit列）を再抽出する。
 // - ダッシュボード表示補完のため。ここでは raw の digit 列を返す（表示側で mask する前提）。
 function computeCardMatchesFromLogEntry(entry) {
@@ -389,6 +507,51 @@ function computeCardMatchesFromLogEntry(entry) {
 	}
 
 	return extractCardNumbers(parts.join('\n'), 50);
+}
+
+function computePhoneMatchesFromLogEntry(entry) {
+	if (!entry) return [];
+	const parts = [];
+	try {
+		if (entry.URL) parts.push(String(entry.URL));
+	} catch {
+		// ignore
+	}
+
+	function tryAddBody(prefix) {
+		try {
+			const textKey = `${prefix}BodyText`;
+			const base64Key = `${prefix}BodyBase64`;
+			const ctKey = `${prefix}ContentType`;
+			const encKey = `${prefix}ContentEncoding`;
+			const text = entry[textKey];
+			if (typeof text === 'string' && text) {
+				parts.push(text);
+				return;
+			}
+			const base64 = entry[base64Key];
+			if (typeof base64 === 'string' && base64) {
+				const buf = Buffer.from(base64, 'base64');
+				const decoded = decodeTextBodyForPii(buf, entry[ctKey] || '', entry[encKey] || '');
+				if (decoded) parts.push(decoded);
+			}
+		} catch {
+			// ignore
+		}
+	}
+
+	tryAddBody('request');
+	tryAddBody('response');
+
+	try {
+		if (entry.requestFormFields && typeof entry.requestFormFields === 'object') {
+			parts.push(JSON.stringify(entry.requestFormFields));
+		}
+	} catch {
+		// ignore
+	}
+
+	return extractPhoneNumbers(parts.join('\n'), 50);
 }
 
 // ログエントリ（JSONLの1行）から、後からメール候補を再抽出する。
@@ -444,10 +607,14 @@ function computeEmailMatchesFromLogEntry(entry) {
 module.exports = {
 	buildEmailPiiFields,
 	buildCardPiiFields,
+	buildPhonePiiFields,
 	computeEmailMatchesFromLogEntry,
 	computeCardMatchesFromLogEntry,
+	computePhoneMatchesFromLogEntry,
 	extractEmails,
 	extractCardNumbers,
+	extractPhoneNumbers,
 	maskEmail,
 	maskCardNumber,
+	maskPhoneNumber,
 };

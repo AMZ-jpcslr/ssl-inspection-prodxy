@@ -18,7 +18,14 @@
 const crypto = require('node:crypto');
 
 // pii.js からマスク/検出ロジックをインポート
-const { maskEmail, computeEmailMatchesFromLogEntry, maskCardNumber, computeCardMatchesFromLogEntry } = require('../pii');
+const {
+	maskEmail,
+	computeEmailMatchesFromLogEntry,
+	maskCardNumber,
+	computeCardMatchesFromLogEntry,
+	maskPhoneNumber,
+	computePhoneMatchesFromLogEntry,
+} = require('../pii');
 
 // ダッシュボードで表示するログエントリの本文やURLなどを切り詰める上限値
 // 前者がフォームフィールド用、後者がURLや本文用の上限値（両方ともMVPの割り切りで設定）。
@@ -224,6 +231,30 @@ function renderPiiWarnings(entry, dashId) {
 		out.push(`<div style="color:#a00; font-weight:600">PII(card) detected (${count})${extra}${sampleText}</div>`);
 	}
 
+	if (entry.piiPhoneDetected === true) {
+		const count = typeof entry.piiPhoneCount === 'number' ? entry.piiPhoneCount : 1;
+		const where = [
+			entry.piiPhoneInUrl ? 'url' : '',
+			entry.piiPhoneInBody ? 'body' : '',
+			entry.piiPhoneInResponse ? 'response' : '',
+			entry.piiPhoneInFormFields ? 'form' : '',
+		]
+			.filter(Boolean)
+			.join(',');
+		const extra = where ? ` <span style="color:#444">(${escapeHtml(where)})</span>` : '';
+
+		let maskedSamples = Array.isArray(entry.piiPhoneSamples) ? entry.piiPhoneSamples : [];
+		if (maskedSamples.length === 0) {
+			try {
+				maskedSamples = computePhoneMatchesFromLogEntry(entry).slice(0, 5).map(maskPhoneNumber);
+			} catch {
+				maskedSamples = [];
+			}
+		}
+		const sampleText = maskedSamples.length ? ` <span style="color:#444">${escapeHtml(maskedSamples.join(', '))}</span>` : '';
+		out.push(`<div style="color:#a00; font-weight:600">PII(phone) detected (${count})${extra}${sampleText}</div>`);
+	}
+
 	return out.join('');
 }
 
@@ -369,7 +400,7 @@ function renderDashboardHtml(entries, opts) {
 			const method = escapeHtml(e.method || '');
 			const status = escapeHtml(String(e.status === undefined || e.status === null ? '' : e.status));
 			const piiWarnings = renderPiiWarnings(e, dashId);
-			const piiRowClass = e && (e.piiEmailDetected === true || e.piiCardDetected === true) ? ' class="pii-row"' : '';
+			const piiRowClass = e && (e.piiEmailDetected === true || e.piiCardDetected === true || e.piiPhoneDetected === true) ? ' class="pii-row"' : '';
 			const uploadedFiles = renderUploadedFiles(e);
 			const multipartMeta = renderMultipartMeta(e);
 			const reqBodyCell = `${uploadedFiles}${multipartMeta}${renderBodyCell(e, 'request', dashId)}`;

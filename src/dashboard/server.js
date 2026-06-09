@@ -535,7 +535,7 @@ function startDashboard(config) {
 		const url = String(entry.URL || '').toLowerCase();
 		const method = String(entry.method || '').toUpperCase();
 		const status = String(entry.status === undefined || entry.status === null ? '' : entry.status);
-		const pii = entry.piiEmailDetected === true || entry.piiCardDetected === true;
+		const pii = entry.piiEmailDetected === true || entry.piiCardDetected === true || entry.piiPhoneDetected === true;
 
 		if (f.q) {
 			const needle = String(f.q).toLowerCase();

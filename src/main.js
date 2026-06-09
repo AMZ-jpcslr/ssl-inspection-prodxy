@@ -46,7 +46,7 @@ const { loadConfig } = require('./config');
 const { appendJsonl } = require('./logStore');
 const { startDashboard } = require('./dashboard/server');
 const { parseContentType, isTextLikeMime, looksBinary, decodeTextBodyForPii } = require('./httpBody');
-const { buildEmailPiiFields, buildCardPiiFields } = require('./pii');
+const { buildEmailPiiFields, buildCardPiiFields, buildPhonePiiFields } = require('./pii');
 const { configurePolicyStore, getBlockDomains } = require('./policyStore');
 
 // このプロトタイプがやること（ざっくり）
@@ -762,6 +762,14 @@ function startMitmProxy(config) {
 				responseBodyTruncated: responseBodyTruncatedForPii,
 				formFields: multipartCapture ? multipartCapture.state.fields : null,
 			});
+			const piiPhoneFields = buildPhonePiiFields({
+				url: fullUrl,
+				requestBodyText: requestBodyTextForPii,
+				requestBodyTruncated: requestBodyTruncatedForPii,
+				responseBodyText: responseBodyTextForPii,
+				responseBodyTruncated: responseBodyTruncatedForPii,
+				formFields: multipartCapture ? multipartCapture.state.fields : null,
+			});
 
 			// Emit a warning without leaking raw URLs or digits.
 			if (piiCardFields && piiCardFields.piiCardDetected === true) {
@@ -788,8 +796,32 @@ function startMitmProxy(config) {
 				}
 			}
 
+			if (piiPhoneFields && piiPhoneFields.piiPhoneDetected === true) {
+				try {
+					const where = [
+						piiPhoneFields.piiPhoneInUrl ? 'url' : '',
+						piiPhoneFields.piiPhoneInRequestBody ? 'request-body' : '',
+						piiPhoneFields.piiPhoneInResponse ? 'response' : '',
+						piiPhoneFields.piiPhoneInFormFields ? 'form' : '',
+					]
+						.filter(Boolean)
+						.join(',');
+					const urlHash = crypto
+						.createHash('sha256')
+						.update(String(fullUrl || ''))
+						.digest('hex')
+						.slice(0, 16);
+					const samples = Array.isArray(piiPhoneFields.piiPhoneSamples) ? piiPhoneFields.piiPhoneSamples : [];
+					console.warn(
+						`PII(phone) detected host=${hostname} method=${method} status=${String(responseStatusCode || '')} where=${where} urlHash=${urlHash} samples=${JSON.stringify(samples)}`
+					);
+				} catch {
+					// ignore
+				}
+			}
+
 			if (shouldLog(hostname, config)) {
-				const piiFields = Object.assign({}, piiEmailFields, piiCardFields);
+				const piiFields = Object.assign({}, piiEmailFields, piiCardFields, piiPhoneFields);
 				let responseFileFields = {};
 				if (responseIsImage && captureResponseFiles && captureFilesForHost) {
 					const meta = responseFileBody.getMeta();
