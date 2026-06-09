@@ -34,6 +34,11 @@ function appendJsonl(filePath, obj) {
   fs.appendFileSync(filePath, `${JSON.stringify(obj)}\n`, 'utf8');
 }
 
+function clearJsonl(filePath) {
+  ensureDirForFile(filePath);
+  fs.writeFileSync(filePath, '', 'utf8');
+}
+
 // JSONLログの末尾N件だけを配列として返す。
 // - MVP割り切りでファイル全体を読み込む（ログが巨大になったら改善余地）。
 // - 壊れた行は無視して続行する。
@@ -58,4 +63,4 @@ function readLastJsonlEntries(filePath, maxEntries) {
   return entries;
 }
 
-module.exports = { appendJsonl, readLastJsonlEntries };
+module.exports = { appendJsonl, readLastJsonlEntries, clearJsonl };

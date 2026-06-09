@@ -20,6 +20,14 @@
 - Proxy: `0.0.0.0:8080`（設定は `config.json`）
 - Dashboard: `http://127.0.0.1:3001/`
 
+### 3) 初回セットアップ
+
+`dashboardAuth.enabled: true` なのに `passwordHash` / `sessionSecret` が未設定の場合、ダッシュボードは自動で初回セットアップ画面へ誘導します。
+
+- 初回URL: `http://127.0.0.1:3001/setup`
+- 管理ユーザー名とパスワードを作成すると、Git 管理外の `config.local.json` に認証設定が保存されます
+- 保存後は一度 `npm start` を再起動してからログインしてください
+
 ## 推奨: ダッシュボード認証
 
 `dashboardAuth.enabled: true` にすると、ダッシュボードにログインが必要になります。
@@ -46,7 +54,7 @@
 
 注意:
 - 本プロトタイプは最小実装のため、ユーザーは1つ（`dashboardAuth.username`）のみ想定です
-- `dashboardAuth.enabled: true` なのに `passwordHash` / `sessionSecret` が無い場合は 500 を返します
+- `dashboardAuth.enabled: true` なのに `passwordHash` / `sessionSecret` が無い場合は `/setup` で初回設定できます
 
 ## ブロック対象ドメインのカスタマイズ（ダッシュボードから）
 
@@ -54,8 +62,20 @@
 
 - 保存すると **プロキシへ即時反映** されます（再起動不要）
 - 永続化先は `./data/policy.json` です（起動時に読み込まれます）
+- 管理操作のPOSTにはCSRFトークンを付け、外部ページからの意図しない更新リスクを下げています
 
 補足: 既定では `config.json` の `blocking.domains` が初期値として読み込まれ、`policy.json` を保存すると以降はその内容が有効になります。
+
+## ヘルスチェックとログ管理
+
+ダッシュボード上部の **Health** セクションで、次の状態を確認できます。
+
+- ダッシュボード認証が設定済みか
+- ローカルCA（`.http-mitm-proxy/certs/ca.pem`）が存在するか
+- アクセスログと保存ファイルディレクトリへ書き込み可能か
+- ボディ取得/ファイル保存の対象ドメイン
+
+Admin セクションの `clear access log` から、アクセスログを空にできます。発表デモ前の初期化や、機微な通信を試した後の削除に使えます。
 
 ## 監査ログ（管理操作の記録）
 
@@ -67,6 +87,8 @@
 記録する操作（最小）:
 - ログイン/ログアウト
 - ブロック対象ドメインの変更
+- 初回セットアップ
+- アクセスログのクリア
 
 ## Docker化
 

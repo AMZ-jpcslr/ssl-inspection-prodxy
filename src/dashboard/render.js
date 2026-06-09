@@ -252,9 +252,31 @@ function renderDashboardHtml(entries, opts) {
 	const authEnabled = options.authEnabled === true;
 	const message = typeof options.message === 'string' ? options.message : '';
 	const blockDomains = Array.isArray(options.blockDomains) ? options.blockDomains : [];
+	const csrfToken = typeof options.csrfToken === 'string' ? options.csrfToken : '';
+	const healthStatus = Array.isArray(options.healthStatus) ? options.healthStatus : [];
 	const blocklistText = blockDomains.join('\n');
 	const messageHtml = message
 		? `<div class="meta" style="color:#060">${escapeHtml(message)}</div>`
+		: '';
+
+	const csrfInput = csrfToken ? `<input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />` : '';
+	const healthHtml = healthStatus.length
+		? `<div class="card">
+		<div style="font-weight:600; margin-bottom:8px;">Health</div>
+		<div class="health-grid">
+			${healthStatus
+				.map((item) => {
+					const ok = item && item.ok === true;
+					const label = escapeHtml((item && item.label) || '');
+					const detail = escapeHtml((item && item.detail) || '');
+					return `<div class="health-item ${ok ? 'ok' : 'warn'}">
+						<div style="font-weight:600">${ok ? 'OK' : 'CHECK'} ${label}</div>
+						<div style="color:#444; word-break:break-word">${detail}</div>
+					</div>`;
+				})
+				.join('')}
+		</div>
+	</div>`
 		: '';
 
 	const adminPanelHtml = `<div class="card">
@@ -267,6 +289,7 @@ function renderDashboardHtml(entries, opts) {
 		</div>
 		<div style="margin-top:10px; color:#444;">Blocked domains (one per line). Saved changes apply immediately to the proxy.</div>
 		<form method="post" action="/settings/blocking" style="margin-top:10px;">
+			${csrfInput}
 			<textarea name="blockDomains" rows="6" style="width:100%; box-sizing:border-box;">${escapeHtml(
 				blocklistText
 			)}</textarea>
@@ -274,6 +297,11 @@ function renderDashboardHtml(entries, opts) {
 				<button type="submit">save</button>
 				<span style="color:#444">Current count: ${escapeHtml(String(blockDomains.length))}</span>
 			</div>
+		</form>
+		<form method="post" action="/settings/logs/clear" style="margin-top:10px;" onsubmit="return confirm('Clear access log?');">
+			${csrfInput}
+			<button type="submit">clear access log</button>
+			<span style="color:#444; margin-left:8px;">Use before demos or after capturing sensitive traffic.</span>
 		</form>
 	</div>`;
 
@@ -312,6 +340,10 @@ function renderDashboardHtml(entries, opts) {
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
+			.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+			.health-item { border: 1px solid #ddd; border-radius: 6px; padding: 8px; }
+			.health-item.ok { border-left: 4px solid #087f23; }
+			.health-item.warn { border-left: 4px solid #b26a00; }
 			textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 			table { width: 100%; border-collapse: collapse; }
 			th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
@@ -323,6 +355,7 @@ function renderDashboardHtml(entries, opts) {
 		</style>
 	</head>
 	<body>
+		${healthHtml}
 		${adminPanelHtml}
 		${messageHtml}
 		<p class="meta">最新 ${entries.length} 件（更新はリロード）</p>
