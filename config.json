@@ -35,6 +35,14 @@
   "blocking": {
     "domains": ["tiktok.com"]
   },
+  "phishing": {
+    "enabled": true,
+    "suspiciousDomains": [],
+    "trustedDomains": ["google.com", "yahoo.co.jp"],
+    "keywords": ["login", "verify", "verification", "account", "secure", "security", "password", "update", "confirm", "wallet", "payment", "bank"],
+    "suspiciousTlds": ["zip", "mov", "click", "work", "top", "xyz", "loan", "tk"],
+    "requireKeywordWithHeuristics": true
+  },
   "inspection": {
     "maxBodyBytes": 4096,
     "captureRequestBody": true,

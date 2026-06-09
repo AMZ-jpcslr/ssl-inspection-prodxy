@@ -28,6 +28,7 @@ const {
 	setBlockDomains,
 	normalizeDomainList,
 } = require('../policyStore');
+const { addTemporaryAllow } = require('../phishingStore');
 const {
 	createScryptPasswordHash,
 	generateSessionSecret,
@@ -341,6 +342,26 @@ function startDashboard(config) {
 		res.setHeader('location', '/login');
 		res.end();
 	}
+
+	app.get('/phishing/proceed', (req, res) => {
+		const rawUrl = req.query && typeof req.query.url === 'string' ? req.query.url : '';
+		let target;
+		try {
+			target = new URL(rawUrl);
+			if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error('unsupported protocol');
+		} catch {
+			res.statusCode = 400;
+			res.setHeader('content-type', 'text/plain; charset=utf-8');
+			res.end('Bad phishing proceed URL');
+			return;
+		}
+
+		addTemporaryAllow(target.toString(), 5 * 60);
+		audit('phishing_warning_proceed', req, { host: target.hostname, url: target.toString() });
+		res.statusCode = 302;
+		res.setHeader('location', target.toString());
+		res.end();
+	});
 
 	if (authEnabled) {
 		app.get('/setup', (req, res) => {

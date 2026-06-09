@@ -48,6 +48,8 @@ const { startDashboard } = require('./dashboard/server');
 const { parseContentType, isTextLikeMime, looksBinary, decodeTextBodyForPii } = require('./httpBody');
 const { buildEmailPiiFields, buildCardPiiFields, buildPhonePiiFields } = require('./pii');
 const { configurePolicyStore, getBlockDomains } = require('./policyStore');
+const { buildPhishingAssessment } = require('./phishing');
+const { isTemporarilyAllowed } = require('./phishingStore');
 
 // このプロトタイプがやること（ざっくり）
 // 1) 従業員端末のブラウザに「明示プロキシ」を設定してもらう
@@ -167,6 +169,49 @@ function buildLogEntry({ url, method, status, hostname }) {
 		method,
 		status,
 	};
+}
+
+function getDashboardPublicBaseUrl(config) {
+	const dashboard = config && config.dashboard ? config.dashboard : {};
+	const host = dashboard.host && dashboard.host !== '0.0.0.0' ? dashboard.host : '127.0.0.1';
+	const port = dashboard.port || 3001;
+	return `http://${host}:${port}`;
+}
+
+function renderPhishingWarningHtml({ url, hostname, reasons, proceedUrl }) {
+	const reasonItems = Array.isArray(reasons) && reasons.length > 0
+		? reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')
+		: '<li>Suspicious URL pattern</li>';
+	return `<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Phishing warning</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; line-height: 1.6; }
+			.panel { max-width: 760px; border: 1px solid #d8a000; border-left: 6px solid #b26a00; border-radius: 8px; padding: 18px; }
+			code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; word-break: break-all; }
+			.actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+			a.button { display: inline-block; padding: 10px 12px; border-radius: 6px; text-decoration: none; }
+			.proceed { background: #8a4b00; color: #fff; }
+			.back { background: #eee; color: #222; }
+		</style>
+	</head>
+	<body>
+		<div class="panel">
+			<h1 style="font-size:22px; margin:0 0 10px 0;">フィッシング詐欺の疑いがあります</h1>
+			<p>このURLは、ログイン情報や決済情報を盗み取るサイトに似た特徴を含んでいます。</p>
+			<p>ドメイン: <code>${escapeHtml(hostname)}</code></p>
+			<p>URL: <code>${escapeHtml(url)}</code></p>
+			<ul>${reasonItems}</ul>
+			<div class="actions">
+				<a class="button back" href="about:blank">戻る</a>
+				<a class="button proceed" href="${escapeHtml(proceedUrl)}">危険性を理解してアクセスする</a>
+			</div>
+		</div>
+	</body>
+</html>`;
 }
 
 // NOTE: Body decoding / MIME heuristics and PII detection have been split into modules:
@@ -560,6 +605,35 @@ function startMitmProxy(config) {
 			fullUrl = new URL(requestPath, `${scheme}://${hostname}`).toString();
 		} catch {
 			fullUrl = String(requestPath);
+		}
+
+		const phishingAssessment = buildPhishingAssessment(fullUrl, config);
+		if (phishingAssessment.suspicious && !isTemporarilyAllowed(fullUrl)) {
+			const dashboardBaseUrl = getDashboardPublicBaseUrl(config);
+			const proceedUrl = `${dashboardBaseUrl}/phishing/proceed?url=${encodeURIComponent(fullUrl)}`;
+			resToClient.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+			resToClient.end(
+				renderPhishingWarningHtml({
+					url: fullUrl,
+					hostname,
+					reasons: phishingAssessment.reasons,
+					proceedUrl,
+				})
+			);
+			if (shouldLog(hostname, config)) {
+				appendJsonl(
+					logPath,
+					Object.assign(
+						buildLogEntry({ url: fullUrl, method, status: 200, hostname }),
+						{
+							phishingWarning: true,
+							phishingWarningReasons: phishingAssessment.reasons,
+							isSSL: Boolean(ctx.isSSL),
+						}
+					)
+				);
+			}
+			return;
 		}
 
 		// 本文収集バッファ（サイズ上限つき）
