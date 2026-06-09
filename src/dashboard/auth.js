@@ -144,9 +144,39 @@ function verifyScryptPassword(password, passwordHash) {
 	return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
 }
 
+function generateSessionSecret() {
+	return crypto.randomBytes(32).toString('hex');
+}
+
+function createScryptPasswordHash(password) {
+	const opts = {
+		N: 16384,
+		r: 8,
+		p: 1,
+		keyLen: 64,
+		saltBytes: 16,
+		maxmem: 64 * 1024 * 1024,
+	};
+	const salt = crypto.randomBytes(opts.saltBytes);
+	const derived = crypto.scryptSync(String(password), salt, opts.keyLen, {
+		N: opts.N,
+		r: opts.r,
+		p: opts.p,
+		maxmem: opts.maxmem,
+	});
+	return {
+		algorithm: 'scrypt',
+		params: { N: opts.N, r: opts.r, p: opts.p, keyLen: opts.keyLen },
+		saltBase64: Buffer.from(salt).toString('base64'),
+		hashBase64: Buffer.from(derived).toString('base64'),
+	};
+}
+
 module.exports = {
 	parseCookies,
 	signDashboardSession,
 	verifyDashboardSession,
 	verifyScryptPassword,
+	generateSessionSecret,
+	createScryptPasswordHash,
 };
