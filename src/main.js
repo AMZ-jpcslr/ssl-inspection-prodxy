@@ -170,7 +170,7 @@ function tunnelConnectDirect({ req, socket, head, hostname, port, logPath, confi
 	upstream.on('error', (err) => {
 		const code = err && err.code ? err.code : '';
 		const message = err && err.message ? err.message : String(err);
-		console.error('TLS bypass tunnel error:', hostname, code, message);
+		console.error('TLSバイパストンネルエラー:', hostname, code, message);
 		try {
 			socket.destroy();
 		} catch {
@@ -254,6 +254,43 @@ function getDashboardPublicBaseUrl(config) {
 	const host = dashboard.host && dashboard.host !== '0.0.0.0' ? dashboard.host : '127.0.0.1';
 	const port = dashboard.port || 3001;
 	return `http://${host}:${port}`;
+}
+
+function getProxyDisplayAddress(config) {
+	const proxyConfig = config && config.proxy ? config.proxy : {};
+	const host = proxyConfig.host && proxyConfig.host !== '0.0.0.0' ? proxyConfig.host : '127.0.0.1';
+	const port = proxyConfig.port || 8080;
+	return `${host}:${port}`;
+}
+
+function printStartupGuide(config) {
+	const dashboardUrl = getDashboardPublicBaseUrl(config);
+	const proxyAddress = getProxyDisplayAddress(config);
+	console.log('');
+	console.log('=== SSL Inspection Proxy ===');
+	console.log(`ダッシュボード: ${dashboardUrl}/`);
+	console.log(`プロキシ:       ${proxyAddress}`);
+	console.log('次の手順:');
+	console.log(`1. ダッシュボードを開く: ${dashboardUrl}/`);
+	console.log(`2. ブラウザ/OSのHTTP・HTTPSプロキシを ${proxyAddress} に設定する`);
+	console.log('3. HTTPSを復号する場合は .http-mitm-proxy/certs/ca.pem を信頼済みルートCAに登録する');
+	console.log('4. 検証後はブラウザ/OSのプロキシ設定を必ず元に戻す');
+	console.log('');
+}
+
+function installShutdownNotice() {
+	let exiting = false;
+	function shutdown(signal) {
+		if (exiting) return;
+		exiting = true;
+		console.log('');
+		console.log(`${signal} を受信しました。プロキシを終了します。`);
+		console.log('検証後は、ブラウザ/OSのプロキシ設定をオフに戻してください。');
+		console.log('不要であれば、登録したローカルCAと data/ 配下のログも削除してください。');
+		process.exit(0);
+	}
+	process.once('SIGINT', () => shutdown('SIGINT'));
+	process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 function localizePhishingReason(reason) {
@@ -645,7 +682,7 @@ function startMitmProxy(config) {
 	proxy.onConnect((req, socket, head, callback) => {
 		const { hostname, port } = parseConnectTarget(req.url);
 		if (hostname && shouldBypassTls(hostname, config)) {
-			console.log(`TLS bypass tunnel: ${hostname}:${port}`);
+			console.log(`TLSバイパス接続: ${hostname}:${port}`);
 			tunnelConnectDirect({ req, socket, head, hostname, port, logPath, config });
 			return;
 		}
@@ -820,7 +857,7 @@ function startMitmProxy(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Blocked</title>
+		<title>ブロック</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
 			code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
@@ -1082,19 +1119,21 @@ function startMitmProxy(config) {
 		port: config.proxy.port,
 	});
 
-	console.log(`MITM proxy listening on ${config.proxy.host}:${config.proxy.port}`);
-	console.log('First run may generate a local CA in the project directory; trust it for HTTPS interception.');
+	console.log(`MITMプロキシ: ${config.proxy.host}:${config.proxy.port}`);
+	console.log('初回起動時はプロジェクト内にローカルCAが作成されます。HTTPSを検査する場合は信頼済みに登録してください。');
 }
 
 function main() {
 	// エントリーポイント: 設定読み込み →（ブロックポリシー初期化）→ ダッシュボード起動 → プロキシ起動
 	const config = loadConfig();
+	installShutdownNotice();
 	const blocking = config && config.blocking ? config.blocking : {};
 	const defaultBlockDomains = Array.isArray(blocking.domains) ? blocking.domains : [];
 	const policyPath = typeof blocking.dynamicPolicyPath === 'string' && blocking.dynamicPolicyPath ? blocking.dynamicPolicyPath : './data/policy.json';
 	configurePolicyStore({ filePath: policyPath, defaultBlockDomains });
 	startDashboard(config);
 	startMitmProxy(config);
+	printStartupGuide(config);
 }
 
 main();

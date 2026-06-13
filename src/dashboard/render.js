@@ -77,12 +77,12 @@ function renderBodyCell(entry, prefix, dashId) {
 	// - 例: 大きすぎる、書き込みエラー、など。
 	const fileSkipped = Boolean(entry && entry[`${prefix}BodyFileSkipped`]);
 	if (fileSkipped) {
-		const reason = escapeHtml((entry && entry[`${prefix}BodyFileSkipReason`]) || 'skipped');
+		const reason = escapeHtml((entry && entry[`${prefix}BodyFileSkipReason`]) || 'スキップ');
 		const maxBytes =
 			entry && typeof entry[`${prefix}BodyFileMaxBytes`] === 'number'
 				? ` max=${entry[`${prefix}BodyFileMaxBytes`]}B`
 				: '';
-		return `<span style="color:#444">(file skipped: ${reason}${maxBytes})</span>`;
+		return `<span style="color:#444">(ファイル保存なし: ${reason}${maxBytes})</span>`;
 	}
 
 	// 分岐2: 本文がファイルとして保存されているケース
@@ -96,7 +96,7 @@ function renderBodyCell(entry, prefix, dashId) {
 			.join(' ');
 		// rel="noopener noreferrer" は target="_blank" のときの安全策（別タブからwindow.opener経由で干渉されるのを避ける）。
 		return `<div>
-			<div><a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">download</a></div>
+			<div><a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">ダウンロード</a></div>
 			<div style="color:#444">${escapeHtml(summary)}${meta ? ` (${escapeHtml(meta)})` : ''}</div>
 		</div>`;
 	}
@@ -108,7 +108,7 @@ function renderBodyCell(entry, prefix, dashId) {
     // どちらのケースでもない（本文なし）の場合は、(none) 表示にする。
 	const base64 = entry && typeof entry[`${prefix}BodyBase64`] === 'string' ? entry[`${prefix}BodyBase64`] : '';
 	if (!text && !base64) {
-		return `<span style="color:#444">(none)</span>`;
+		return `<span style="color:#444">(なし)</span>`;
 	}
 
     // 本文がある場合は、ダッシュボードで表示するための要約とリンクを返す。
@@ -122,7 +122,7 @@ function renderBodyCell(entry, prefix, dashId) {
 	const idPart = dashId === undefined || dashId === null || dashId === '' ? '' : encodeURIComponent(String(dashId));
 	const viewUrl = idPart ? `/entry/${idPart}/body?prefix=${prefix}` : '';
 	return `<div>
-		<div>${viewUrl ? `<a href="${viewUrl}" target="_blank" rel="noopener noreferrer">view</a>` : ''}</div>
+		<div>${viewUrl ? `<a href="${viewUrl}" target="_blank" rel="noopener noreferrer">表示</a>` : ''}</div>
 		<div style="color:#444">${escapeHtml(summary)}${meta ? ` (${escapeHtml(meta)})` : ''}</div>
 	</div>`;
 }
@@ -147,7 +147,7 @@ function renderUploadedFiles(entry) {
 		.filter(Boolean)
 		.join('');
 	if (!items) return '';
-	return `<div style="margin-bottom:6px"><div style="color:#444">uploaded files:</div><ul style="margin:4px 0 0 18px">${items}</ul></div>`;
+	return `<div style="margin-bottom:6px"><div style="color:#444">アップロードファイル:</div><ul style="margin:4px 0 0 18px">${items}</ul></div>`;
 }
 
 // multipart の補足情報（フォームフィールド/スキップしたファイル/エラー）を details で表示する。
@@ -162,7 +162,7 @@ function renderMultipartMeta(entry) {
 			const fieldsJson = JSON.stringify(fields, null, 2);
 			const fieldsPreview = truncateForDashboard(fieldsJson, DASHBOARD_MAX_FORMFIELDS_CHARS);
 			fieldsHtml = `<details>
-				<summary>form fields (${keys.length})</summary>
+				<summary>フォーム項目 (${keys.length})</summary>
 				<pre style="white-space:pre-wrap; word-break:break-word; margin:8px 0 0 0; max-height:200px; overflow:auto;">${escapeHtml(
 					fieldsPreview
 				)}</pre>
@@ -174,12 +174,12 @@ function renderMultipartMeta(entry) {
 
 	let skippedHtml = '';
 	if (Array.isArray(entry.requestUploadedFilesSkipped) && entry.requestUploadedFilesSkipped.length > 0) {
-		skippedHtml = `<div style="color:#444">skipped files: ${entry.requestUploadedFilesSkipped.length}</div>`;
+		skippedHtml = `<div style="color:#444">保存しなかったファイル: ${entry.requestUploadedFilesSkipped.length}</div>`;
 	}
 
 	let errorsHtml = '';
 	if (Array.isArray(entry.requestMultipartErrors) && entry.requestMultipartErrors.length > 0) {
-		errorsHtml = `<div style="color:#a00">multipart errors: ${escapeHtml(entry.requestMultipartErrors.join('; '))}</div>`;
+		errorsHtml = `<div style="color:#a00">multipart エラー: ${escapeHtml(entry.requestMultipartErrors.join('; '))}</div>`;
 	}
 
 	return `${skippedHtml}${errorsHtml}${fieldsHtml}`;
@@ -190,7 +190,7 @@ function renderMultipartMeta(entry) {
 function renderPiiWarnings(entry, dashId) {
 	if (!entry) return '';
 	const idPart = dashId === undefined || dashId === null || dashId === '' ? '' : encodeURIComponent(String(dashId));
-	const viewLink = idPart ? ` <a href="/entry/${idPart}/pii" target="_blank" rel="noopener noreferrer">view</a>` : '';
+	const viewLink = idPart ? ` <a href="/entry/${idPart}/pii" target="_blank" rel="noopener noreferrer">詳細</a>` : '';
 
 	const out = [];
 	if (entry.piiEmailDetected === true) {
@@ -204,7 +204,7 @@ function renderPiiWarnings(entry, dashId) {
 			.filter(Boolean)
 			.join(',');
 		const extra = where ? ` <span style="color:#444">(${escapeHtml(where)})</span>` : '';
-		out.push(`<div style="color:#a00; font-weight:600">PII(email) detected (${count})${extra}${viewLink}</div>`);
+		out.push(`<div style="color:#a00; font-weight:600">PII(メール) 検出 (${count})${extra}${viewLink}</div>`);
 	}
 
 	if (entry.piiCardDetected === true) {
@@ -228,7 +228,7 @@ function renderPiiWarnings(entry, dashId) {
 			}
 		}
 		const sampleText = maskedSamples.length ? ` <span style="color:#444">${escapeHtml(maskedSamples.join(', '))}</span>` : '';
-		out.push(`<div style="color:#a00; font-weight:600">PII(card) detected (${count})${extra}${sampleText}</div>`);
+		out.push(`<div style="color:#a00; font-weight:600">PII(カード) 検出 (${count})${extra}${sampleText}</div>`);
 	}
 
 	if (entry.piiPhoneDetected === true) {
@@ -252,7 +252,7 @@ function renderPiiWarnings(entry, dashId) {
 			}
 		}
 		const sampleText = maskedSamples.length ? ` <span style="color:#444">${escapeHtml(maskedSamples.join(', '))}</span>` : '';
-		out.push(`<div style="color:#a00; font-weight:600">PII(phone) detected (${count})${extra}${sampleText}</div>`);
+		out.push(`<div style="color:#a00; font-weight:600">PII(電話) 検出 (${count})${extra}${sampleText}</div>`);
 	}
 
 	return out.join('');
@@ -275,10 +275,10 @@ function renderStatusBadges(entry) {
 	if (!entry) return '';
 	const badges = [];
 	if (entry.isSSL === true) badges.push(['neutral', 'HTTPS']);
-	if (entry.blocked === true) badges.push(['danger', 'blocked']);
-	if (entry.phishingWarning === true) badges.push(['warn', 'phishing']);
+	if (entry.blocked === true) badges.push(['danger', 'ブロック']);
+	if (entry.phishingWarning === true) badges.push(['warn', 'フィッシング警告']);
 	if (entryHasPii(entry)) badges.push(['danger', 'PII']);
-	if (entryHasSavedFile(entry)) badges.push(['neutral', 'file']);
+	if (entryHasSavedFile(entry)) badges.push(['neutral', 'ファイル']);
 	if (badges.length === 0) return '';
 	return `<div class="badges">${badges
 		.map(([kind, label]) => `<span class="badge ${kind}">${escapeHtml(label)}</span>`)
@@ -340,7 +340,7 @@ function renderDashboardHtml(entries, opts) {
 	const csrfInput = csrfToken ? `<input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />` : '';
 	const healthHtml = healthStatus.length
 		? `<div class="card">
-		<div style="font-weight:600; margin-bottom:8px;">Health</div>
+		<div style="font-weight:600; margin-bottom:8px;">ヘルスチェック</div>
 		<div class="health-grid">
 			${healthStatus
 				.map((item) => {
@@ -392,21 +392,21 @@ function renderDashboardHtml(entries, opts) {
 
 	const adminPanelHtml = `<div class="card">
 		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
-			<div style="font-weight:600">Admin</div>
+			<div style="font-weight:600">管理</div>
 			<div style="display:flex; gap:12px; align-items:center;">
-				<a href="/audit">audit log</a>
-				${authEnabled ? `<a href="/logout">logout</a>` : ''}
+				<a href="/audit">監査ログ</a>
+				${authEnabled ? `<a href="/logout">ログアウト</a>` : ''}
 			</div>
 		</div>
-		<div style="margin-top:10px; color:#444;">Blocked domains (one per line). Saved changes apply immediately to the proxy.</div>
+		<div style="margin-top:10px; color:#444;">ブロック対象ドメイン（1行1件）。保存するとすぐプロキシに反映されます。</div>
 		<form method="post" action="/settings/blocking" style="margin-top:10px;">
 			${csrfInput}
 			<textarea name="blockDomains" rows="6" style="width:100%; box-sizing:border-box;">${escapeHtml(
 				blocklistText
 			)}</textarea>
 			<div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-				<button type="submit">save</button>
-				<span style="color:#444">Current count: ${escapeHtml(String(blockDomains.length))}</span>
+				<button type="submit">保存</button>
+				<span style="color:#444">現在の件数: ${escapeHtml(String(blockDomains.length))}</span>
 			</div>
 		</form>
 		<form method="post" action="/settings/logs/clear" style="margin-top:10px;" onsubmit="return confirm('アクセスログを空にします。元に戻せません。');">
@@ -415,13 +415,13 @@ function renderDashboardHtml(entries, opts) {
 				<span>ログ削除の確認（<code>CLEAR</code> と入力）</span>
 				<input name="confirmClear" autocomplete="off" placeholder="CLEAR" />
 			</label>
-			<button type="submit">clear access log</button>
+			<button type="submit">アクセスログを削除</button>
 			<span style="color:#444; margin-left:8px;">削除前に必要なログは <code>data/access.log.jsonl</code> を保管してください。</span>
 		</form>
 	</div>`;
 
 	const settingsPanelHtml = `<div class="card">
-		<div style="font-weight:600; margin-bottom:8px;">Capture Settings</div>
+		<div style="font-weight:600; margin-bottom:8px;">取得設定</div>
 		<div class="meta">ここで保存した内容は <code>config.local.json</code> に保存され、プロキシへ即時反映されます。</div>
 		<form method="post" action="/settings/capture" class="settings-grid">
 			${csrfInput}
@@ -458,26 +458,26 @@ function renderDashboardHtml(entries, opts) {
 			</label>
 			<label class="check">
 				<input type="checkbox" name="captureRequestBody" value="1"${configSettings.captureRequestBody ? ' checked' : ''} />
-				<span>request body</span>
+				<span>リクエスト本文</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="captureResponseBody" value="1"${configSettings.captureResponseBody ? ' checked' : ''} />
-				<span>response body</span>
+				<span>レスポンス本文</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="captureRequestFiles" value="1"${configSettings.captureRequestFiles ? ' checked' : ''} />
-				<span>request image files</span>
+				<span>リクエスト画像ファイル</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="captureResponseFiles" value="1"${configSettings.captureResponseFiles ? ' checked' : ''} />
-				<span>response image files</span>
+				<span>レスポンス画像ファイル</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="tlsBypassEnabled" value="1"${configSettings.tlsBypassEnabled !== false ? ' checked' : ''} />
-				<span>TLS bypass for pinned apps</span>
+				<span>証明書ピンニング系アプリをTLSバイパス</span>
 			</label>
 			<div style="display:flex; align-items:end;">
-				<button type="submit">save settings</button>
+				<button type="submit">設定を保存</button>
 			</div>
 		</form>
 	</div>`;
@@ -485,54 +485,54 @@ function renderDashboardHtml(entries, opts) {
 	const methodOptions = ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'CONNECT', 'OPTIONS', 'HEAD']
 		.map((m) => {
 			const selected = String(filters.method || '') === m ? ' selected' : '';
-			return `<option value="${escapeHtml(m)}"${selected}>${escapeHtml(m || 'any method')}</option>`;
+			return `<option value="${escapeHtml(m)}"${selected}>${escapeHtml(m || 'すべて')}</option>`;
 		})
 		.join('');
 
 	const filterPanelHtml = `<div class="card">
 		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
-			<div style="font-weight:600">Filters</div>
-			${hasFilters ? `<a href="/">clear filters</a>` : ''}
+			<div style="font-weight:600">フィルタ</div>
+			${hasFilters ? `<a href="/">フィルタ解除</a>` : ''}
 		</div>
 		<form method="get" action="/" class="filter-grid" style="margin-top:10px;">
 			<label>
-				<span>keyword</span>
-				<input name="q" value="${escapeHtml(filters.q || '')}" placeholder="URL, domain, content-type" />
+				<span>キーワード</span>
+				<input name="q" value="${escapeHtml(filters.q || '')}" placeholder="URL / ドメイン / Content-Type" />
 			</label>
 			<label>
-				<span>domain</span>
+				<span>ドメイン</span>
 				<input name="domain" value="${escapeHtml(filters.domain || '')}" placeholder="example.com" />
 			</label>
 			<label>
-				<span>method</span>
+				<span>メソッド</span>
 				<select name="method">${methodOptions}</select>
 			</label>
 			<label>
-				<span>status</span>
+				<span>ステータス</span>
 				<input name="status" value="${escapeHtml(filters.status || '')}" placeholder="200 / 4 / 403" />
 			</label>
 			<label class="check">
 				<input type="checkbox" name="pii" value="1"${filters.onlyPii ? ' checked' : ''} />
-				<span>PII only</span>
+				<span>PIIのみ</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="blocked" value="1"${filters.onlyBlocked ? ' checked' : ''} />
-				<span>blocked only</span>
+				<span>ブロックのみ</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="files" value="1"${filters.onlyFiles ? ' checked' : ''} />
-				<span>files only</span>
+				<span>ファイルありのみ</span>
 			</label>
 			<div style="display:flex; align-items:end;">
-				<button type="submit">apply</button>
+				<button type="submit">適用</button>
 			</div>
 		</form>
 	</div>`;
 
 	const refreshPanelHtml = `<div class="meta toolbar">
 		<span>${escapeHtml(refreshLabel)}</span>
-		<a href="${escapeHtml(refreshToggleHref)}">${autoRefreshEnabled ? 'pause' : 'resume'}</a>
-		<a href="/">refresh now</a>
+		<a href="${escapeHtml(refreshToggleHref)}">${autoRefreshEnabled ? '一時停止' : '再開'}</a>
+		<a href="/">今すぐ更新</a>
 	</div>`;
 
 	const rows = entries
@@ -567,7 +567,7 @@ function renderDashboardHtml(entries, opts) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Proxy Logs</title>
+		<title>プロキシログ</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
@@ -617,13 +617,13 @@ function renderDashboardHtml(entries, opts) {
 		<table>
 			<thead>
 				<tr>
-					<th>timestamp</th>
-					<th>domain</th>
-					<th>method</th>
-					<th>status</th>
+					<th>時刻</th>
+					<th>ドメイン</th>
+					<th>メソッド</th>
+					<th>状態</th>
 					<th>URL</th>
-					<th>request body</th>
-					<th>response body</th>
+					<th>リクエスト本文</th>
+					<th>レスポンス本文</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -646,19 +646,19 @@ function getPiiTypeDetails(entry) {
 	const types = [
 		{
 			key: 'Email',
-			label: 'email',
+			label: 'メール',
 			mask: maskEmail,
 			compute: computeEmailMatchesFromLogEntry,
 		},
 		{
 			key: 'Card',
-			label: 'card',
+			label: 'カード',
 			mask: maskCardNumber,
 			compute: computeCardMatchesFromLogEntry,
 		},
 		{
 			key: 'Phone',
-			label: 'phone',
+			label: '電話番号',
 			mask: maskPhoneNumber,
 			compute: computePhoneMatchesFromLogEntry,
 		},
@@ -689,21 +689,21 @@ function getPiiTypeDetails(entry) {
 
 function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal }) {
 	const canReveal = authEnabled === true;
-	const revealBlockedNote = wantReveal && !canReveal ? 'Raw reveal is disabled when dashboardAuth is off.' : '';
+	const revealBlockedNote = wantReveal && !canReveal ? 'ダッシュボード認証が無効なため、生データ表示は利用できません。' : '';
 	const idForUrl = encodeURIComponent(String(idParam || index));
 	const details = getPiiTypeDetails(entry);
 	const anyDetected = details.some((d) => d.detected);
 	const revealLink = anyDetected
 		? canReveal
-			? `<a href="/entry/${idForUrl}/pii?reveal=1" rel="noopener noreferrer">reveal raw matches</a>`
-			: `<span style="color:#444">(enable dashboardAuth to allow raw reveal)</span>`
+					? `<a href="/entry/${idForUrl}/pii?reveal=1" rel="noopener noreferrer">生の一致候補を表示</a>`
+			: `<span style="color:#444">(生データ表示にはダッシュボード認証を有効にしてください)</span>`
 		: '';
 
 	const sections = details
 		.map((detail) => {
 			const maskedHtml = detail.maskedSamples.length
 				? `<pre style="white-space:pre-wrap; word-break:break-word;">${escapeHtml(JSON.stringify(detail.maskedSamples, null, 2))}</pre>`
-				: `<div style="color:#444">(no masked samples)</div>`;
+				: `<div style="color:#444">(マスク済みサンプルなし)</div>`;
 			let rawHtml = '';
 			if (wantReveal && canReveal && detail.detected) {
 				let rawMatches = [];
@@ -713,13 +713,13 @@ function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal })
 					rawMatches = [];
 				}
 				rawHtml = rawMatches.length
-					? `<h3>raw matches</h3><pre style="white-space:pre-wrap; word-break:break-word;">${escapeHtml(JSON.stringify(rawMatches, null, 2))}</pre>`
-					: `<h3>raw matches</h3><div style="color:#444">(no matches found from stored fields; body may be truncated or encoded)</div>`;
+					? `<h3>生の一致候補</h3><pre style="white-space:pre-wrap; word-break:break-word;">${escapeHtml(JSON.stringify(rawMatches, null, 2))}</pre>`
+					: `<h3>生の一致候補</h3><div style="color:#444">(保存済みフィールドから一致候補を再検出できませんでした。本文が切り詰められたか、エンコードされている可能性があります)</div>`;
 			}
 			return `<section class="pii-section">
 				<h2>${escapeHtml(detail.label)}</h2>
-				<div class="meta">status: ${detail.detected ? `detected (count=${escapeHtml(String(detail.count))}${detail.where ? `, where=${escapeHtml(detail.where)}` : ''})` : 'not detected'}</div>
-				<h3>masked samples</h3>
+				<div class="meta">状態: ${detail.detected ? `検出 (件数=${escapeHtml(String(detail.count))}${detail.where ? `, 場所=${escapeHtml(detail.where)}` : ''})` : '未検出'}</div>
+				<h3>マスク済みサンプル</h3>
 				${maskedHtml}
 				${rawHtml}
 			</section>`;
@@ -731,7 +731,7 @@ function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal })
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>PII view</title>
+		<title>PII 詳細</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
@@ -742,12 +742,12 @@ function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal })
 		</style>
 	</head>
 	<body>
-			<div class="meta"><a href="/">&larr; back</a></div>
+			<div class="meta"><a href="/">&larr; 戻る</a></div>
 		<div class="card">
-			<div class="meta">domain: ${escapeHtml(String(entry.domain || ''))}</div>
+			<div class="meta">ドメイン: ${escapeHtml(String(entry.domain || ''))}</div>
 			<div class="meta">url: <span style="word-break:break-all">${escapeHtml(String(entry.URL || ''))}</span></div>
 			${revealBlockedNote ? `<div class="meta" style="color:#a00">${escapeHtml(revealBlockedNote)}</div>` : ''}
-			${anyDetected ? `<div class="meta">${revealLink}</div>` : '<div class="meta">No PII fields were detected for this entry.</div>'}
+			${anyDetected ? `<div class="meta">${revealLink}</div>` : '<div class="meta">このログではPIIは検出されていません。</div>'}
 			${sections}
 		</div>
 	</body>

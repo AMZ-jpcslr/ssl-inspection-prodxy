@@ -109,7 +109,7 @@ function startDashboard(config) {
 		if (verifyCsrf(req)) return next();
 		res.statusCode = 403;
 		res.setHeader('content-type', 'text/plain; charset=utf-8');
-		res.end('Invalid CSRF token');
+		res.end('CSRFトークンが不正です');
 	}
 
 	function canWriteFilePath(filePath) {
@@ -140,34 +140,34 @@ function startDashboard(config) {
 		const fileDomains = inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [];
 		return [
 			{
-				label: 'Dashboard auth',
+				label: 'ダッシュボード認証',
 				ok: !authEnabled || isDashboardAuthConfigured(),
-				detail: authEnabled ? (isDashboardAuthConfigured() ? 'configured' : 'setup required') : 'disabled',
+				detail: authEnabled ? (isDashboardAuthConfigured() ? '設定済み' : '初回設定が必要') : '無効',
 			},
 			{
-				label: 'Local CA',
+				label: 'ローカルCA',
 				ok: fs.existsSync(caPath),
-				detail: fs.existsSync(caPath) ? '.http-mitm-proxy/certs/ca.pem' : 'created after first HTTPS use',
+				detail: fs.existsSync(caPath) ? '.http-mitm-proxy/certs/ca.pem' : 'HTTPS通信後に生成されます',
 			},
 			{
-				label: 'Access log',
+				label: 'アクセスログ',
 				ok: canWriteFilePath(logPath),
 				detail: logPath,
 			},
 			{
-				label: 'Saved files',
+				label: '保存ファイル',
 				ok: canWriteDir(fileSaveDir),
 				detail: fileSaveDir,
 			},
 			{
-				label: 'Body capture scope',
+				label: '本文取得範囲',
 				ok: bodyDomains.length > 0,
-				detail: bodyDomains.length > 0 ? bodyDomains.join(', ') : 'all domains',
+				detail: bodyDomains.length > 0 ? bodyDomains.join(', ') : 'すべてのドメイン',
 			},
 			{
-				label: 'File capture scope',
+				label: 'ファイル保存範囲',
 				ok: fileDomains.length > 0,
-				detail: fileDomains.length > 0 ? fileDomains.join(', ') : 'all domains',
+				detail: fileDomains.length > 0 ? fileDomains.join(', ') : 'すべてのドメイン',
 			},
 		];
 	}
@@ -314,7 +314,7 @@ function startDashboard(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Dashboard Login</title>
+		<title>ダッシュボードログイン</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
 			.card { max-width: 420px; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
@@ -325,14 +325,14 @@ function startDashboard(config) {
 	</head>
 	<body>
 		<div class="card">
-			<h1 style="font-size:18px; margin: 0 0 10px 0;">Dashboard Login</h1>
+			<h1 style="font-size:18px; margin: 0 0 10px 0;">ダッシュボードログイン</h1>
 			${msg}
 			<form method="post" action="/login">
-				<label>username</label>
+				<label>ユーザー名</label>
 				<input name="username" autocomplete="username" />
-				<label>password</label>
+				<label>パスワード</label>
 				<input name="password" type="password" autocomplete="current-password" />
-				<button type="submit">login</button>
+				<button type="submit">ログイン</button>
 			</form>
 		</div>
 	</body>
@@ -346,7 +346,7 @@ function startDashboard(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Initial Setup</title>
+		<title>初期設定</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
 			.card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
@@ -358,17 +358,17 @@ function startDashboard(config) {
 	</head>
 	<body>
 		<div class="card">
-			<h1 style="font-size:18px; margin: 0 0 10px 0;">Initial Dashboard Setup</h1>
+			<h1 style="font-size:18px; margin: 0 0 10px 0;">ダッシュボード初期設定</h1>
 			<p class="meta">管理画面のパスワードを作成します。秘密情報は Git 管理外の <code>config.local.json</code> に保存されます。</p>
 			${msg}
 			<form method="post" action="/setup">
-				<label>username</label>
+				<label>ユーザー名</label>
 				<input name="username" value="${escapeHtml(authUsername)}" autocomplete="username" />
-				<label>password</label>
+				<label>パスワード</label>
 				<input name="password" type="password" autocomplete="new-password" />
-				<label>confirm password</label>
+				<label>パスワード確認</label>
 				<input name="passwordConfirm" type="password" autocomplete="new-password" />
-				<button type="submit">create admin account</button>
+				<button type="submit">管理アカウントを作成</button>
 			</form>
 		</div>
 	</body>
@@ -433,7 +433,7 @@ function startDashboard(config) {
 		} catch {
 			res.statusCode = 400;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Bad phishing proceed URL');
+			res.end('フィッシング警告の遷移URLが不正です');
 			return;
 		}
 
@@ -473,13 +473,13 @@ function startDashboard(config) {
 			if (password.length < 8) {
 				res.statusCode = 400;
 				res.setHeader('content-type', 'text/html; charset=utf-8');
-				res.end(setupPageHtml('Password must be at least 8 characters.'));
+				res.end(setupPageHtml('パスワードは8文字以上にしてください。'));
 				return;
 			}
 			if (password !== passwordConfirm) {
 				res.statusCode = 400;
 				res.setHeader('content-type', 'text/html; charset=utf-8');
-				res.end(setupPageHtml('Passwords do not match.'));
+				res.end(setupPageHtml('パスワードが一致しません。'));
 				return;
 			}
 			try {
@@ -492,7 +492,7 @@ function startDashboard(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Setup Complete</title>
+		<title>初期設定完了</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
 			.card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
@@ -501,7 +501,7 @@ function startDashboard(config) {
 	</head>
 	<body>
 		<div class="card">
-			<h1 style="font-size:18px; margin: 0 0 10px 0;">Setup complete</h1>
+			<h1 style="font-size:18px; margin: 0 0 10px 0;">初期設定が完了しました</h1>
 			<p><code>config.local.json</code> を作成しました。</p>
 			<p>一度プロキシを再起動してから、<a href="/login">ログイン画面</a>を開いてください。</p>
 		</div>
@@ -510,7 +510,7 @@ function startDashboard(config) {
 			} catch (e) {
 				res.statusCode = 500;
 				res.setHeader('content-type', 'text/html; charset=utf-8');
-				res.end(setupPageHtml(`Failed to write config.local.json: ${e && e.message ? e.message : String(e)}`));
+				res.end(setupPageHtml(`config.local.json の書き込みに失敗しました: ${e && e.message ? e.message : String(e)}`));
 			}
 		});
 
@@ -523,7 +523,7 @@ function startDashboard(config) {
 				res.end();
 				return;
 			}
-			const message = req.query && req.query.setup === 'complete' ? 'Setup complete. Please log in.' : '';
+			const message = req.query && req.query.setup === 'complete' ? '初期設定が完了しました。ログインしてください。' : '';
 			res.end(loginPageHtml(message));
 		});
 
@@ -540,7 +540,7 @@ function startDashboard(config) {
 			if (username !== authUsername || !verifyScryptPassword(password, authPasswordHash)) {
 				res.statusCode = 401;
 				res.setHeader('content-type', 'text/html; charset=utf-8');
-				res.end(loginPageHtml('Invalid username or password'));
+				res.end(loginPageHtml('ユーザー名またはパスワードが違います。'));
 				return;
 			}
 			audit('login', req, { username: authUsername }, authUsername);
@@ -585,7 +585,7 @@ function startDashboard(config) {
 		if (!ca.exists) {
 			res.statusCode = 404;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Local CA has not been generated yet. Access an HTTPS site through the proxy first.');
+			res.end('ローカルCAはまだ生成されていません。先にプロキシ経由でHTTPSサイトへアクセスしてください。');
 			return;
 		}
 		res.setHeader('content-type', 'application/x-pem-file');
@@ -783,7 +783,7 @@ function startDashboard(config) {
 		} catch (e) {
 			res.statusCode = 500;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end(`Failed to update capture settings: ${e && e.message ? e.message : String(e)}`);
+			res.end(`取得設定の更新に失敗しました: ${e && e.message ? e.message : String(e)}`);
 		}
 	});
 
@@ -793,7 +793,7 @@ function startDashboard(config) {
 			if (confirmClear !== 'CLEAR') {
 				res.statusCode = 400;
 				res.setHeader('content-type', 'text/plain; charset=utf-8');
-				res.end('Type CLEAR to confirm access log deletion.');
+				res.end('アクセスログを削除するには CLEAR と入力してください。');
 				return;
 			}
 			clearJsonl(logPath);
@@ -804,7 +804,7 @@ function startDashboard(config) {
 		} catch (e) {
 			res.statusCode = 500;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end(`Failed to clear access log: ${e && e.message ? e.message : String(e)}`);
+			res.end(`アクセスログの削除に失敗しました: ${e && e.message ? e.message : String(e)}`);
 		}
 	});
 
@@ -845,7 +845,7 @@ function startDashboard(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Audit Log</title>
+		<title>監査ログ</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			table { width: 100%; border-collapse: collapse; }
@@ -855,16 +855,16 @@ function startDashboard(config) {
 		</style>
 	</head>
 	<body>
-		<div class="meta"><a href="/">&larr; back</a></div>
-		<p class="meta">最新 ${entries.length} 件（更新はリロード）</p>
+		<div class="meta"><a href="/">&larr; 戻る</a></div>
+		<p class="meta">最新 ${entries.length} 件</p>
 		<table>
 			<thead>
 				<tr>
-					<th>timestamp</th>
-					<th>actor</th>
-					<th>action</th>
-					<th>remote</th>
-					<th>extra</th>
+					<th>時刻</th>
+					<th>操作者</th>
+					<th>操作</th>
+					<th>接続元</th>
+					<th>詳細</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -889,7 +889,7 @@ function startDashboard(config) {
 		if (!prefix) {
 			res.statusCode = 400;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Bad request');
+			res.end('不正なリクエストです');
 			return;
 		}
 
@@ -900,7 +900,7 @@ function startDashboard(config) {
 		if (!entry) {
 			res.statusCode = 404;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Not found');
+			res.end('見つかりません');
 			return;
 		}
 
@@ -932,7 +932,7 @@ function startDashboard(config) {
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Body view</title>
+		<title>本文詳細</title>
 		<style>
 			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
 			pre { white-space: pre-wrap; word-break: break-word; }
@@ -940,11 +940,11 @@ function startDashboard(config) {
 		</style>
 	</head>
 	<body>
-		<div class="meta"><a href="/">&larr; back</a></div>
-		<div class="meta">${escapeHtml(prefix)} body: ${escapeHtml(String(bytes))}B${truncated ? '…' : ''} ${escapeHtml(
+		<div class="meta"><a href="/">&larr; 戻る</a></div>
+		<div class="meta">${prefix === 'request' ? 'リクエスト本文' : 'レスポンス本文'}: ${escapeHtml(String(bytes))}B${truncated ? '…' : ''} ${escapeHtml(
 			kind
 		)}${meta ? ` (${escapeHtml(meta)})` : ''}</div>
-		${fileUrl ? `<div class="meta">file: <a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">download</a></div>` : ''}
+		${fileUrl ? `<div class="meta">ファイル: <a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener noreferrer">ダウンロード</a></div>` : ''}
 		<pre>${escapeHtml(bodyLimited || '')}</pre>
 	</body>
 </html>`);
@@ -961,7 +961,7 @@ function startDashboard(config) {
 		if (!entry) {
 			res.statusCode = 404;
 			res.setHeader('content-type', 'text/plain; charset=utf-8');
-			res.end('Not found');
+			res.end('見つかりません');
 			return;
 		}
 
@@ -977,13 +977,13 @@ function startDashboard(config) {
 	const server = http.createServer(app);
 	server.on('error', (err) => {
 		console.error(
-			`Dashboard failed to start on http://${config.dashboard.host}:${config.dashboard.port}:`,
+			`ダッシュボードを起動できませんでした http://${config.dashboard.host}:${config.dashboard.port}:`,
 			err && err.message ? err.message : err
 		);
 		process.exitCode = 1;
 	});
 	server.listen(config.dashboard.port, config.dashboard.host, () => {
-		console.log(`Dashboard listening on http://${config.dashboard.host}:${config.dashboard.port}`);
+		console.log(`ダッシュボード: http://${config.dashboard.host}:${config.dashboard.port}`);
 	});
 }
 
