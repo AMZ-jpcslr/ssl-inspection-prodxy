@@ -35,6 +35,18 @@
   "blocking": {
     "domains": ["tiktok.com"]
   },
+  "tlsBypass": {
+    "enabled": true,
+    "domains": [
+      "spotify.com",
+      "scdn.co",
+      "pscdn.co",
+      "spotifycdn.com",
+      "audio-ak-spotify-com.akamaized.net",
+      "audio-akp-bbr-spotify-com.akamaized.net",
+      "heads-fa.spotifycdn.com"
+    ]
+  },
   "phishing": {
     "enabled": true,
     "suspiciousDomains": [],

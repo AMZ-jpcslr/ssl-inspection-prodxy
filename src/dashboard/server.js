@@ -174,11 +174,14 @@ function startDashboard(config) {
 
 	function buildLogScope() {
 		const filtering = config && config.filtering ? config.filtering : {};
+		const tlsBypass = config && config.tlsBypass ? config.tlsBypass : {};
 		return {
 			mode: typeof filtering.mode === 'string' && filtering.mode ? filtering.mode : 'all',
 			domains: Array.isArray(filtering.domains) ? filtering.domains : [],
 			bodyDomains: inspection && Array.isArray(inspection.bodyCaptureDomains) ? inspection.bodyCaptureDomains : [],
 			fileDomains: inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [],
+			tlsBypassEnabled: tlsBypass.enabled !== false,
+			tlsBypassDomains: Array.isArray(tlsBypass.domains) ? tlsBypass.domains : [],
 		};
 	}
 
@@ -194,11 +197,14 @@ function startDashboard(config) {
 	function buildConfigSettings() {
 		const filtering = config && config.filtering ? config.filtering : {};
 		const logging = config && config.logging ? config.logging : {};
+		const tlsBypass = config && config.tlsBypass ? config.tlsBypass : {};
 		return {
 			filteringMode: typeof filtering.mode === 'string' && filtering.mode ? filtering.mode : 'all',
 			filteringDomains: Array.isArray(filtering.domains) ? filtering.domains : [],
 			bodyCaptureDomains: inspection && Array.isArray(inspection.bodyCaptureDomains) ? inspection.bodyCaptureDomains : [],
 			fileCaptureDomains: inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [],
+			tlsBypassEnabled: tlsBypass.enabled !== false,
+			tlsBypassDomains: Array.isArray(tlsBypass.domains) ? tlsBypass.domains : [],
 			maxBodyBytes: inspection && Number.isFinite(inspection.maxBodyBytes) ? inspection.maxBodyBytes : 4096,
 			loggingMaxBytes: logging && Number.isFinite(logging.maxBytes) ? logging.maxBytes : 0,
 			captureRequestBody: !(inspection && inspection.captureRequestBody === false),
@@ -729,6 +735,7 @@ function startDashboard(config) {
 		const filteringDomains = parseDomainTextarea(req.body && req.body.filteringDomains);
 		const bodyCaptureDomains = parseDomainTextarea(req.body && req.body.bodyCaptureDomains);
 		const fileCaptureDomains = parseDomainTextarea(req.body && req.body.fileCaptureDomains);
+		const tlsBypassDomains = parseDomainTextarea(req.body && req.body.tlsBypassDomains);
 		const maxBodyBytesRaw = Number(req.body && req.body.maxBodyBytes);
 		const loggingMaxBytesRaw = Number(req.body && req.body.loggingMaxBytes);
 		const nextMaxBodyBytes = Number.isFinite(maxBodyBytesRaw) ? Math.max(0, Math.floor(maxBodyBytesRaw)) : 4096;
@@ -737,6 +744,10 @@ function startDashboard(config) {
 			filtering: {
 				mode: filteringMode,
 				domains: filteringDomains,
+			},
+			tlsBypass: {
+				enabled: Boolean(req.body && req.body.tlsBypassEnabled === '1'),
+				domains: tlsBypassDomains,
 			},
 			inspection: {
 				...(config.inspection && typeof config.inspection === 'object' ? config.inspection : {}),
@@ -762,6 +773,7 @@ function startDashboard(config) {
 				filteringDomainCount: filteringDomains.length,
 				bodyCaptureDomainCount: bodyCaptureDomains.length,
 				fileCaptureDomainCount: fileCaptureDomains.length,
+				tlsBypassDomainCount: tlsBypassDomains.length,
 				maxBodyBytes: nextMaxBodyBytes,
 				loggingMaxBytes: nextLoggingMaxBytes,
 			});

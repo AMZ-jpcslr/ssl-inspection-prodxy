@@ -361,12 +361,14 @@ function renderDashboardHtml(entries, opts) {
 	const logDomains = Array.isArray(logScope.domains) ? logScope.domains : [];
 	const bodyDomains = Array.isArray(logScope.bodyDomains) ? logScope.bodyDomains : [];
 	const fileDomains = Array.isArray(logScope.fileDomains) ? logScope.fileDomains : [];
+	const tlsBypassDomains = Array.isArray(logScope.tlsBypassDomains) ? logScope.tlsBypassDomains : [];
 	const loggingSummary =
 		logMode === 'allowlist'
 			? `ログ対象: ${renderInlineList(logDomains, '未設定')}`
 			: 'ログ対象: すべてのドメイン';
 	const bodySummary = `本文取得対象: ${renderInlineList(bodyDomains, 'すべてのドメイン')}`;
 	const fileSummary = `ファイル保存対象: ${renderInlineList(fileDomains, 'すべてのドメイン')}`;
+	const tlsBypassSummary = `TLSバイパス対象: ${logScope.tlsBypassEnabled === false ? '無効' : renderInlineList(tlsBypassDomains, '未設定')}`;
 	const caExists = caInfo.exists === true;
 	const caPath = typeof caInfo.path === 'string' ? caInfo.path : '.http-mitm-proxy/certs/ca.pem';
 	const caDownload = caExists ? `<a href="/ca.pem">CAをダウンロード</a>` : '<span style="color:#666">HTTPS通信後にCAが生成されます</span>';
@@ -376,12 +378,14 @@ function renderDashboardHtml(entries, opts) {
 			<li><strong>ブラウザ/OSのプロキシ</strong>を <code>127.0.0.1:8080</code> に設定します。</li>
 			<li><strong>ログ対象</strong>を確認します。${loggingSummary}</li>
 			<li><strong>HTTPSの中身を見る場合</strong>は <code>${escapeHtml(caPath)}</code> を信頼済みルートCAに登録します。${caDownload}</li>
+			<li><strong>証明書ピンニング系アプリ</strong>はTLSバイパス対象に入れると、復号せずに通信を通せます。</li>
 			<li><strong>通信後</strong>にこの画面を確認します。${refreshLabel}なので、新しいログは自動で反映されます。</li>
 		</ol>
 		<div class="scope-note">
 			<div>${loggingSummary}</div>
 			<div>${bodySummary}</div>
 			<div>${fileSummary}</div>
+			<div>${tlsBypassSummary}</div>
 			<div>Windows登録例: <code>certutil -addstore -f root .\\.http-mitm-proxy\\certs\\ca.pem</code></div>
 		</div>
 	</div>`;
@@ -441,6 +445,10 @@ function renderDashboardHtml(entries, opts) {
 				<textarea name="fileCaptureDomains" rows="4">${escapeHtml((configSettings.fileCaptureDomains || []).join('\n'))}</textarea>
 			</label>
 			<label>
+				<span>TLSバイパス対象ドメイン（1行1件）</span>
+				<textarea name="tlsBypassDomains" rows="4">${escapeHtml((configSettings.tlsBypassDomains || []).join('\n'))}</textarea>
+			</label>
+			<label>
 				<span>本文保存上限 bytes</span>
 				<input name="maxBodyBytes" type="number" min="0" value="${escapeHtml(String(configSettings.maxBodyBytes || 0))}" />
 			</label>
@@ -463,6 +471,10 @@ function renderDashboardHtml(entries, opts) {
 			<label class="check">
 				<input type="checkbox" name="captureResponseFiles" value="1"${configSettings.captureResponseFiles ? ' checked' : ''} />
 				<span>response image files</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" name="tlsBypassEnabled" value="1"${configSettings.tlsBypassEnabled !== false ? ' checked' : ''} />
+				<span>TLS bypass for pinned apps</span>
 			</label>
 			<div style="display:flex; align-items:end;">
 				<button type="submit">save settings</button>

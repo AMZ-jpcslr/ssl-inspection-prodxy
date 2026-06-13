@@ -36,6 +36,7 @@ MITM/セキュリティ注意（重要）
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const net = require('node:net');
 const { PassThrough } = require('node:stream');
 const { URL } = require('node:url');
 
@@ -104,6 +105,20 @@ function isBlocked(hostname, config) {
 	return false;
 }
 
+function getTlsBypassDomains(config) {
+	const tlsBypass = config && config.tlsBypass ? config.tlsBypass : {};
+	if (tlsBypass.enabled === false) return [];
+	return Array.isArray(tlsBypass.domains) ? tlsBypass.domains : [];
+}
+
+function shouldBypassTls(hostname, config) {
+	const rules = getTlsBypassDomains(config);
+	for (const rule of rules) {
+		if (hostnameMatches(hostname, rule)) return true;
+	}
+	return false;
+}
+
 function shouldLog(hostname, config) {
 	// ログ対象かどうか（フィルタリング）。
 	// filtering.mode:
@@ -118,6 +133,69 @@ function shouldLog(hostname, config) {
 		return false;
 	}
 	return true;
+}
+
+function parseConnectTarget(reqUrl) {
+	const raw = String(reqUrl || '');
+	const idx = raw.lastIndexOf(':');
+	if (idx <= 0) return { hostname: normalizeHostname(raw), port: 443 };
+	const hostname = normalizeHostname(raw.slice(0, idx));
+	const port = Number(raw.slice(idx + 1));
+	return { hostname, port: Number.isFinite(port) && port > 0 ? port : 443 };
+}
+
+function tunnelConnectDirect({ req, socket, head, hostname, port, logPath, config }) {
+	const upstream = net.connect({ host: hostname, port, allowHalfOpen: true }, () => {
+		upstream.on('finish', () => {
+			try {
+				socket.destroy();
+			} catch {
+				// ignore
+			}
+		});
+		socket.on('close', () => {
+			try {
+				upstream.end();
+			} catch {
+				// ignore
+			}
+		});
+		socket.write('HTTP/1.1 200 OK\r\n\r\n', 'utf8', () => {
+			if (head && head.length > 0) upstream.write(head);
+			upstream.pipe(socket);
+			socket.pipe(upstream);
+		});
+	});
+
+	upstream.on('error', (err) => {
+		const code = err && err.code ? err.code : '';
+		const message = err && err.message ? err.message : String(err);
+		console.error('TLS bypass tunnel error:', hostname, code, message);
+		try {
+			socket.destroy();
+		} catch {
+			// ignore
+		}
+	});
+	socket.on('error', () => {
+		try {
+			upstream.destroy();
+		} catch {
+			// ignore
+		}
+	});
+
+	if (shouldLog(hostname, config)) {
+		appendJsonl(
+			logPath,
+			Object.assign(buildLogEntry({ url: `https://${hostname}:${port}/`, method: 'CONNECT', status: 200, hostname }), {
+				isSSL: true,
+				tlsBypass: true,
+				tlsBypassReason: 'configured_domain',
+			}),
+			config.logging
+		);
+	}
 }
 
 function shouldCaptureBody(hostname, config) {
@@ -565,6 +643,13 @@ function startMitmProxy(config) {
 
 	// ホストレベルでのブロック判定（CONNECTリクエストに対して）
 	proxy.onConnect((req, socket, head, callback) => {
+		const { hostname, port } = parseConnectTarget(req.url);
+		if (hostname && shouldBypassTls(hostname, config)) {
+			console.log(`TLS bypass tunnel: ${hostname}:${port}`);
+			tunnelConnectDirect({ req, socket, head, hostname, port, logPath, config });
+			return;
+		}
+
 		// ここで CONNECT をブロックすると、ブラウザ側では
 		// "ERR_TUNNEL_CONNECTION_FAILED" のような分かりにくいエラーになりがち。
 		//
