@@ -119,6 +119,36 @@ function shouldBypassTls(hostname, config) {
 	return false;
 }
 
+function isDiagnosticProxyCheck(hostname, requestPath) {
+	const host = normalizeHostname(hostname);
+	const path = String(requestPath || '/');
+	return host === 'proxy.test' && path.startsWith('/ssl-inspection-proxy-check');
+}
+
+function renderDiagnosticProxyCheckHtml({ isSSL, hostname }) {
+	return `<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>プロキシ接続チェック</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; line-height: 1.6; }
+			.card { border: 1px solid #ddd; border-radius: 8px; padding: 14px; max-width: 720px; }
+			code { background: #f5f5f5; padding: 1px 4px; border-radius: 4px; }
+		</style>
+	</head>
+	<body>
+		<div class="card">
+			<h1>プロキシを経由しています</h1>
+			<p>${isSSL ? 'HTTPS通信の復号チェックに成功しました。ローカルCAも信頼されています。' : 'HTTP通信のプロキシ経由チェックに成功しました。'}</p>
+			<p>診断ホスト: <code>${escapeHtml(hostname)}</code></p>
+			<p>ダッシュボードの接続診断ページへ戻り、ページを再読み込みしてください。</p>
+		</div>
+	</body>
+</html>`;
+}
+
 function shouldLog(hostname, config) {
 	// ログ対象かどうか（フィルタリング）。
 	// filtering.mode:
@@ -744,6 +774,20 @@ function startMitmProxy(config) {
 			fullUrl = new URL(requestPath, `${scheme}://${hostname}`).toString();
 		} catch {
 			fullUrl = String(requestPath);
+		}
+
+		if (isDiagnosticProxyCheck(hostname, requestPath)) {
+			resToClient.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+			resToClient.end(renderDiagnosticProxyCheckHtml({ isSSL: Boolean(ctx.isSSL), hostname }));
+			appendJsonl(
+				logPath,
+				Object.assign(buildLogEntry({ url: fullUrl, method, status: 200, hostname }), {
+					isSSL: Boolean(ctx.isSSL),
+					diagnosticProxyCheck: true,
+				}),
+				config.logging
+			);
+			return;
 		}
 
 		const phishingAssessment = buildPhishingAssessment(fullUrl, config);

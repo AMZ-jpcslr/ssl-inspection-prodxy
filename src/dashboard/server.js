@@ -42,6 +42,7 @@ const {
 	truncateForDashboard,
 	DASHBOARD_BODY_PAGE_MAX_CHARS,
 	renderDashboardHtml,
+	renderDiagnosticsHtml,
 	renderPiiDetailHtml,
 	computeDashboardEntryKey,
 } = require('./render');
@@ -212,6 +213,28 @@ function startDashboard(config) {
 			captureRequestFiles: Boolean(inspection && inspection.captureRequestFiles === true),
 			captureResponseFiles: Boolean(inspection && inspection.captureResponseFiles === true),
 		};
+	}
+
+	function getDashboardDisplayUrl() {
+		const dashboard = config && config.dashboard ? config.dashboard : {};
+		const host = dashboard.host && dashboard.host !== '0.0.0.0' ? dashboard.host : '127.0.0.1';
+		const port = dashboard.port || 3001;
+		return `http://${host}:${port}`;
+	}
+
+	function getProxyDisplayAddress() {
+		const proxy = config && config.proxy ? config.proxy : {};
+		const host = proxy.host && proxy.host !== '0.0.0.0' ? proxy.host : '127.0.0.1';
+		const port = proxy.port || 8080;
+		return `${host}:${port}`;
+	}
+
+	function findLastProxyDiagnosticCheck() {
+		const entries = readLastJsonlEntries(logPath, maxEntries);
+		for (let i = entries.length - 1; i >= 0; i--) {
+			if (entries[i] && entries[i].diagnosticProxyCheck === true) return entries[i];
+		}
+		return null;
 	}
 
 	function isPlainObject(value) {
@@ -701,6 +724,20 @@ function startDashboard(config) {
 				configSettings: buildConfigSettings(),
 				autoRefreshEnabled,
 				message,
+			})
+		);
+	});
+
+	app.get('/diagnostics', (req, res) => {
+		const tlsBypass = config && config.tlsBypass ? config.tlsBypass : {};
+		res.setHeader('content-type', 'text/html; charset=utf-8');
+		res.end(
+			renderDiagnosticsHtml({
+				dashboardUrl: getDashboardDisplayUrl(),
+				proxyAddress: getProxyDisplayAddress(),
+				caInfo: buildCaInfo(),
+				lastProxyCheck: findLastProxyDiagnosticCheck(),
+				tlsBypassDomains: Array.isArray(tlsBypass.domains) ? tlsBypass.domains : [],
 			})
 		);
 	});

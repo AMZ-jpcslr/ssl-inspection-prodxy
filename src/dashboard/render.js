@@ -394,6 +394,7 @@ function renderDashboardHtml(entries, opts) {
 		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
 			<div style="font-weight:600">管理</div>
 			<div style="display:flex; gap:12px; align-items:center;">
+				<a href="/diagnostics">接続診断</a>
 				<a href="/audit">監査ログ</a>
 				${authEnabled ? `<a href="/logout">ログアウト</a>` : ''}
 			</div>
@@ -754,12 +755,80 @@ function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal })
 </html>`;
 }
 
+function renderDiagnosticsHtml(options) {
+	const opts = options && typeof options === 'object' ? options : {};
+	const dashboardUrl = typeof opts.dashboardUrl === 'string' ? opts.dashboardUrl : 'http://127.0.0.1:3001';
+	const proxyAddress = typeof opts.proxyAddress === 'string' ? opts.proxyAddress : '127.0.0.1:8080';
+	const caInfo = opts.caInfo && typeof opts.caInfo === 'object' ? opts.caInfo : {};
+	const lastProxyCheck = opts.lastProxyCheck && typeof opts.lastProxyCheck === 'object' ? opts.lastProxyCheck : null;
+	const tlsBypassDomains = Array.isArray(opts.tlsBypassDomains) ? opts.tlsBypassDomains : [];
+	const proxyCheckUrl = 'http://proxy.test/ssl-inspection-proxy-check';
+	const httpsCheckUrl = 'https://proxy.test/ssl-inspection-proxy-check';
+	const checkedAt = lastProxyCheck && lastProxyCheck.timestamp ? escapeHtml(lastProxyCheck.timestamp) : '';
+	const checkedScheme = lastProxyCheck && lastProxyCheck.isSSL ? 'HTTPS' : 'HTTP';
+	const lastCheckHtml = lastProxyCheck
+		? `<div class="status ok">直近の診断アクセス: OK (${checkedScheme}, ${checkedAt})</div>`
+		: '<div class="status warn">まだ診断アクセスは記録されていません。下のチェックURLを開いてください。</div>';
+	const caHtml = caInfo.exists
+		? `<div class="status ok">ローカルCA: 生成済み <code>${escapeHtml(caInfo.path || '.http-mitm-proxy/certs/ca.pem')}</code></div>`
+		: '<div class="status warn">ローカルCA: 未生成です。HTTPS通信を一度プロキシ経由で開くと生成されます。</div>';
+	const tlsBypassHtml = tlsBypassDomains.length
+		? tlsBypassDomains.map((domain) => `<code>${escapeHtml(domain)}</code>`).join(', ')
+		: '<span style="color:#666">未設定</span>';
+
+	return `<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>接続診断</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; line-height: 1.6; }
+			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
+			.status { border-left: 4px solid #bbb; padding: 8px 10px; margin: 8px 0; background: #fafafa; }
+			.status.ok { border-left-color: #087f23; }
+			.status.warn { border-left-color: #b26a00; }
+			code { background: #f5f5f5; padding: 1px 4px; border-radius: 4px; }
+			.actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+			.button { display:inline-block; border:1px solid #bbb; border-radius:6px; padding:7px 10px; color:#111; text-decoration:none; background:#fff; }
+			.meta { color:#444; }
+		</style>
+	</head>
+	<body>
+		<div class="meta"><a href="/">&larr; 戻る</a></div>
+		<h1>接続診断</h1>
+		<div class="card">
+			<h2>基本設定</h2>
+			<div>ダッシュボード: <code>${escapeHtml(dashboardUrl)}</code></div>
+			<div>ブラウザ/OSに設定するプロキシ: <code>${escapeHtml(proxyAddress)}</code></div>
+			${caHtml}
+		</div>
+		<div class="card">
+			<h2>プロキシ経由チェック</h2>
+			${lastCheckHtml}
+			<p class="meta">HTTPチェックは「ブラウザがプロキシを使っているか」を確認します。HTTPSチェックはそれに加えて「ローカルCAを信頼できているか」を確認します。</p>
+			<div class="actions">
+				<a class="button" href="${proxyCheckUrl}" target="_blank" rel="noopener noreferrer">HTTPチェックを開く</a>
+				<a class="button" href="${httpsCheckUrl}" target="_blank" rel="noopener noreferrer">HTTPSチェックを開く</a>
+			</div>
+			<p class="meta">開いたあと、このページを再読み込みしてください。成功していれば直近の診断アクセスがOKになります。</p>
+		</div>
+		<div class="card">
+			<h2>TLSバイパス</h2>
+			<div>対象: ${tlsBypassHtml}</div>
+			<p class="meta">Spotifyなど証明書ピンニングが強いアプリは、ここに入っているドメインでは復号せずに通信を通します。</p>
+		</div>
+	</body>
+</html>`;
+}
+
 module.exports = {
 	DASHBOARD_BODY_PAGE_MAX_CHARS,
 	DASHBOARD_MAX_FORMFIELDS_CHARS,
 	escapeHtml,
 	truncateForDashboard,
 	renderDashboardHtml,
+	renderDiagnosticsHtml,
 	renderPiiDetailHtml,
 	computeDashboardEntryKey,
 };
