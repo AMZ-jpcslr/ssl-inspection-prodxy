@@ -172,6 +172,81 @@ function startDashboard(config) {
 		];
 	}
 
+	function buildLogScope() {
+		const filtering = config && config.filtering ? config.filtering : {};
+		return {
+			mode: typeof filtering.mode === 'string' && filtering.mode ? filtering.mode : 'all',
+			domains: Array.isArray(filtering.domains) ? filtering.domains : [],
+			bodyDomains: inspection && Array.isArray(inspection.bodyCaptureDomains) ? inspection.bodyCaptureDomains : [],
+			fileDomains: inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [],
+		};
+	}
+
+	function buildCaInfo() {
+		const caPath = path.resolve(process.cwd(), '.http-mitm-proxy/certs/ca.pem');
+		return {
+			path: '.http-mitm-proxy/certs/ca.pem',
+			absPath: caPath,
+			exists: fs.existsSync(caPath),
+		};
+	}
+
+	function buildConfigSettings() {
+		const filtering = config && config.filtering ? config.filtering : {};
+		const logging = config && config.logging ? config.logging : {};
+		return {
+			filteringMode: typeof filtering.mode === 'string' && filtering.mode ? filtering.mode : 'all',
+			filteringDomains: Array.isArray(filtering.domains) ? filtering.domains : [],
+			bodyCaptureDomains: inspection && Array.isArray(inspection.bodyCaptureDomains) ? inspection.bodyCaptureDomains : [],
+			fileCaptureDomains: inspection && Array.isArray(inspection.fileCaptureDomains) ? inspection.fileCaptureDomains : [],
+			maxBodyBytes: inspection && Number.isFinite(inspection.maxBodyBytes) ? inspection.maxBodyBytes : 4096,
+			loggingMaxBytes: logging && Number.isFinite(logging.maxBytes) ? logging.maxBytes : 0,
+			captureRequestBody: !(inspection && inspection.captureRequestBody === false),
+			captureResponseBody: !(inspection && inspection.captureResponseBody === false),
+			captureRequestFiles: Boolean(inspection && inspection.captureRequestFiles === true),
+			captureResponseFiles: Boolean(inspection && inspection.captureResponseFiles === true),
+		};
+	}
+
+	function isPlainObject(value) {
+		return value !== null && typeof value === 'object' && !Array.isArray(value);
+	}
+
+	function deepMerge(target, source) {
+		if (!isPlainObject(target) || !isPlainObject(source)) return target;
+		for (const [key, value] of Object.entries(source)) {
+			if (isPlainObject(value) && isPlainObject(target[key])) {
+				deepMerge(target[key], value);
+			} else {
+				target[key] = value;
+			}
+		}
+		return target;
+	}
+
+	function parseDomainTextarea(value) {
+		return normalizeDomainList(
+			String(value || '')
+				.split(/\r?\n/)
+				.map((s) => s.trim())
+				.filter(Boolean)
+		);
+	}
+
+	function writeLocalConfigPatch(patch) {
+		const localConfigPath = path.resolve(process.cwd(), 'config.local.json');
+		let localConfig = {};
+		try {
+			if (fs.existsSync(localConfigPath) && fs.statSync(localConfigPath).isFile()) {
+				localConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+			}
+		} catch {
+			localConfig = {};
+		}
+		deepMerge(localConfig, patch);
+		fs.writeFileSync(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`, 'utf8');
+	}
+
 	function getRemoteAddr(req) {
 		// 監査ログ用に、リクエスト元アドレスを可能な範囲で取る。
 		// - x-forwarded-for はプロキシ/ロードバランサ配下のときに入ることがある。
@@ -499,6 +574,19 @@ function startDashboard(config) {
 	// 保存済みファイル（アップロード画像/レスポンス画像）を配信する。
 	// - src/main.js が inspection.fileSaveDir 配下に保存したファイルを、リンクで見られるようにする。
 	// - index: false でディレクトリ一覧は出さない（MVPでも“うっかり露出”を減らす）。
+	app.get('/ca.pem', (req, res) => {
+		const ca = buildCaInfo();
+		if (!ca.exists) {
+			res.statusCode = 404;
+			res.setHeader('content-type', 'text/plain; charset=utf-8');
+			res.end('Local CA has not been generated yet. Access an HTTPS site through the proxy first.');
+			return;
+		}
+		res.setHeader('content-type', 'application/x-pem-file');
+		res.setHeader('content-disposition', 'attachment; filename="ssl-inspection-proxy-ca.pem"');
+		res.sendFile(ca.absPath);
+	});
+
 	app.use('/files', express.static(filesAbs, { fallthrough: true, index: false }));
 
 	function findEntryByDashboardIdParam(entries, idParam) {
@@ -593,6 +681,7 @@ function startDashboard(config) {
 		const forRender = allForRender.filter((entry) => entryMatchesFilters(entry, filters));
 		res.setHeader('content-type', 'text/html; charset=utf-8');
 		const message = req.query && typeof req.query.msg === 'string' ? req.query.msg : '';
+		const autoRefreshEnabled = firstQueryValue(req.query && req.query.refresh) !== '0';
 		res.end(
 			renderDashboardHtml(forRender, {
 				authEnabled,
@@ -601,6 +690,10 @@ function startDashboard(config) {
 				totalEntries: allForRender.length,
 				csrfToken: csrfTokenForUser(getAuthedUsername(req)),
 				healthStatus: buildHealthStatus(),
+				logScope: buildLogScope(),
+				caInfo: buildCaInfo(),
+				configSettings: buildConfigSettings(),
+				autoRefreshEnabled,
 				message,
 			})
 		);
@@ -631,8 +724,66 @@ function startDashboard(config) {
 		res.end();
 	});
 
+	app.post('/settings/capture', requireCsrf, (req, res) => {
+		const filteringMode = req.body && req.body.filteringMode === 'allowlist' ? 'allowlist' : 'all';
+		const filteringDomains = parseDomainTextarea(req.body && req.body.filteringDomains);
+		const bodyCaptureDomains = parseDomainTextarea(req.body && req.body.bodyCaptureDomains);
+		const fileCaptureDomains = parseDomainTextarea(req.body && req.body.fileCaptureDomains);
+		const maxBodyBytesRaw = Number(req.body && req.body.maxBodyBytes);
+		const loggingMaxBytesRaw = Number(req.body && req.body.loggingMaxBytes);
+		const nextMaxBodyBytes = Number.isFinite(maxBodyBytesRaw) ? Math.max(0, Math.floor(maxBodyBytesRaw)) : 4096;
+		const nextLoggingMaxBytes = Number.isFinite(loggingMaxBytesRaw) ? Math.max(0, Math.floor(loggingMaxBytesRaw)) : 0;
+		const patch = {
+			filtering: {
+				mode: filteringMode,
+				domains: filteringDomains,
+			},
+			inspection: {
+				...(config.inspection && typeof config.inspection === 'object' ? config.inspection : {}),
+				maxBodyBytes: nextMaxBodyBytes,
+				captureRequestBody: Boolean(req.body && req.body.captureRequestBody === '1'),
+				captureResponseBody: Boolean(req.body && req.body.captureResponseBody === '1'),
+				captureRequestFiles: Boolean(req.body && req.body.captureRequestFiles === '1'),
+				captureResponseFiles: Boolean(req.body && req.body.captureResponseFiles === '1'),
+				bodyCaptureDomains,
+				fileCaptureDomains,
+			},
+			logging: {
+				...(config.logging && typeof config.logging === 'object' ? config.logging : {}),
+				maxBytes: nextLoggingMaxBytes,
+			},
+		};
+
+		try {
+			deepMerge(config, patch);
+			writeLocalConfigPatch(patch);
+			audit('update_capture_settings', req, {
+				filteringMode,
+				filteringDomainCount: filteringDomains.length,
+				bodyCaptureDomainCount: bodyCaptureDomains.length,
+				fileCaptureDomainCount: fileCaptureDomains.length,
+				maxBodyBytes: nextMaxBodyBytes,
+				loggingMaxBytes: nextLoggingMaxBytes,
+			});
+			res.statusCode = 302;
+			res.setHeader('location', '/?msg=capture%20settings%20updated');
+			res.end();
+		} catch (e) {
+			res.statusCode = 500;
+			res.setHeader('content-type', 'text/plain; charset=utf-8');
+			res.end(`Failed to update capture settings: ${e && e.message ? e.message : String(e)}`);
+		}
+	});
+
 	app.post('/settings/logs/clear', requireCsrf, (req, res) => {
 		try {
+			const confirmClear = req.body && typeof req.body.confirmClear === 'string' ? req.body.confirmClear.trim() : '';
+			if (confirmClear !== 'CLEAR') {
+				res.statusCode = 400;
+				res.setHeader('content-type', 'text/plain; charset=utf-8');
+				res.end('Type CLEAR to confirm access log deletion.');
+				return;
+			}
 			clearJsonl(logPath);
 			audit('clear_access_log', req, { path: logPath });
 			res.statusCode = 302;

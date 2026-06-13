@@ -178,10 +178,23 @@ function getDashboardPublicBaseUrl(config) {
 	return `http://${host}:${port}`;
 }
 
-function renderPhishingWarningHtml({ url, hostname, reasons, proceedUrl }) {
+function localizePhishingReason(reason) {
+	const r = String(reason || '');
+	if (r.startsWith('suspicious domain:')) return `明示的に疑わしいドメインとして設定されています (${r.slice('suspicious domain:'.length).trim()})`;
+	if (r.startsWith('lookalike domain of official:')) return `公式ドメインに似た文字列です (${r.slice('lookalike domain of official:'.length).trim()})`;
+	if (r === 'credential/payment related keyword in URL') return 'URLにログイン/認証/決済に関係する語が含まれています';
+	if (r === 'URL contains @ in authority') return 'URLのホスト部分に @ が含まれています';
+	if (r === 'punycode hostname') return '国際化ドメインを表す punycode ホスト名です';
+	if (r === 'many subdomains') return 'サブドメインが多く、偽装URLの可能性があります';
+	if (r === 'suspicious top-level domain') return '警戒対象のトップレベルドメインです';
+	return r || '疑わしいURLパターンです';
+}
+
+function renderPhishingWarningHtml({ url, hostname, reasons, proceedUrl, dashboardUrl }) {
 	const reasonItems = Array.isArray(reasons) && reasons.length > 0
-		? reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')
+		? reasons.map((r) => `<li>${escapeHtml(localizePhishingReason(r))}</li>`).join('')
 		: '<li>Suspicious URL pattern</li>';
+	const dashboardHref = typeof dashboardUrl === 'string' && dashboardUrl ? dashboardUrl : '/';
 	return `<!doctype html>
 <html lang="ja">
 	<head>
@@ -194,8 +207,10 @@ function renderPhishingWarningHtml({ url, hostname, reasons, proceedUrl }) {
 			code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; word-break: break-all; }
 			.actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 			a.button { display: inline-block; padding: 10px 12px; border-radius: 6px; text-decoration: none; }
+			button.button { border: 0; cursor: pointer; font: inherit; padding: 10px 12px; border-radius: 6px; }
 			.proceed { background: #8a4b00; color: #fff; }
 			.back { background: #eee; color: #222; }
+			.meta { color:#444; }
 		</style>
 	</head>
 	<body>
@@ -205,8 +220,10 @@ function renderPhishingWarningHtml({ url, hostname, reasons, proceedUrl }) {
 			<p>ドメイン: <code>${escapeHtml(hostname)}</code></p>
 			<p>URL: <code>${escapeHtml(url)}</code></p>
 			<ul>${reasonItems}</ul>
+			<p class="meta">心当たりがない場合は、このページを閉じるか前のページに戻ってください。必要に応じて管理者にURLを共有してください。</p>
 			<div class="actions">
-				<a class="button back" href="about:blank">戻る</a>
+				<button class="button back" type="button" onclick="history.back()">戻る</button>
+				<a class="button back" href="${escapeHtml(dashboardHref)}">ダッシュボードを見る</a>
 				<a class="button proceed" href="${escapeHtml(proceedUrl)}">危険性を理解してアクセスする</a>
 			</div>
 		</div>
@@ -618,6 +635,7 @@ function startMitmProxy(config) {
 					hostname,
 					reasons: phishingAssessment.reasons,
 					proceedUrl,
+					dashboardUrl: `${dashboardBaseUrl}/`,
 				})
 			);
 			if (shouldLog(hostname, config)) {
@@ -630,7 +648,8 @@ function startMitmProxy(config) {
 							phishingWarningReasons: phishingAssessment.reasons,
 							isSSL: Boolean(ctx.isSSL),
 						}
-					)
+					),
+					config.logging
 				);
 			}
 			return;
@@ -734,7 +753,8 @@ function startMitmProxy(config) {
 					Object.assign(
 						buildLogEntry({ url: fullUrl, method, status: 403, hostname }),
 						{ blocked: true, isSSL: Boolean(ctx.isSSL) }
-					)
+					),
+					config.logging
 				);
 			}
 			return;
@@ -962,7 +982,8 @@ function startMitmProxy(config) {
 						captureResponseBody && captureBodiesForHost && !(responseIsImage && captureResponseFiles && captureFilesForHost)
 							? responseTextBody.toLogFields('response', resContentType, resContentEncoding)
 							: {}
-					)
+					),
+					config.logging
 				);
 			}
 			cb();

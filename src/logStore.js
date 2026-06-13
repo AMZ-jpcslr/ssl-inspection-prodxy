@@ -29,8 +29,29 @@ function ensureDirForFile(filePath) {
 
 // 1ログイベントをJSONLとして追記する。
 // - obj は通常「プロキシの1通信」や「ブロックイベント」など。
-function appendJsonl(filePath, obj) {
+function rotateJsonlIfNeeded(filePath, maxBytes) {
+  const limit = Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : 0;
+  if (limit <= 0) return;
+  try {
+    if (!fs.existsSync(filePath)) return;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < limit) return;
+    const rotatedPath = `${filePath}.1`;
+    try {
+      fs.rmSync(rotatedPath, { force: true });
+    } catch {
+      // ignore
+    }
+    fs.renameSync(filePath, rotatedPath);
+  } catch {
+    // ローテーション失敗でプロキシ本体を止めない。追記側にフォールバックする。
+  }
+}
+
+function appendJsonl(filePath, obj, opts) {
   ensureDirForFile(filePath);
+  const options = opts && typeof opts === 'object' ? opts : {};
+  rotateJsonlIfNeeded(filePath, Number(options.maxBytes));
   fs.appendFileSync(filePath, `${JSON.stringify(obj)}\n`, 'utf8');
 }
 
