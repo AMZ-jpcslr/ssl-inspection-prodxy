@@ -23,6 +23,7 @@ const DEFAULT_KEYWORDS = [
 ];
 
 const DEFAULT_SUSPICIOUS_TLDS = ['zip', 'mov', 'click', 'work', 'top', 'xyz', 'loan', 'tk'];
+const MULTI_PART_PUBLIC_SUFFIXES = ['co.jp', 'ne.jp', 'or.jp', 'ac.jp', 'go.jp', 'co.uk', 'com.au', 'com.br'];
 
 function normalizeHostname(hostname) {
 	return String(hostname || '').toLowerCase().trim().replace(/\.$/, '');
@@ -54,6 +55,57 @@ function hasSuspiciousTld(hostname, tlds) {
 	const parts = normalizeHostname(hostname).split('.').filter(Boolean);
 	const tld = parts.length > 0 ? parts[parts.length - 1] : '';
 	return tld && tlds.includes(tld);
+}
+
+function getComparableDomain(hostname) {
+	const parts = normalizeHostname(hostname).split('.').filter(Boolean);
+	if (parts.length <= 2) return parts.join('.');
+	const lastTwo = parts.slice(-2).join('.');
+	if (MULTI_PART_PUBLIC_SUFFIXES.includes(lastTwo)) {
+		return parts.slice(-3).join('.');
+	}
+	return parts.slice(-2).join('.');
+}
+
+function levenshteinDistance(a, b, maxDistance) {
+	const left = String(a || '');
+	const right = String(b || '');
+	const limit = Number.isFinite(maxDistance) ? maxDistance : Infinity;
+	if (Math.abs(left.length - right.length) > limit) return limit + 1;
+	const prev = new Array(right.length + 1);
+	const curr = new Array(right.length + 1);
+	for (let j = 0; j <= right.length; j++) prev[j] = j;
+	for (let i = 1; i <= left.length; i++) {
+		curr[0] = i;
+		let rowMin = curr[0];
+		for (let j = 1; j <= right.length; j++) {
+			const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+			curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+			if (curr[j] < rowMin) rowMin = curr[j];
+		}
+		if (rowMin > limit) return limit + 1;
+		for (let j = 0; j <= right.length; j++) prev[j] = curr[j];
+	}
+	return prev[right.length];
+}
+
+function findLookalikeOfficialDomain(hostname, officialDomains, maxDistance) {
+	const host = normalizeHostname(hostname);
+	const comparableHost = getComparableDomain(host);
+	const limit = Number.isFinite(maxDistance) ? Math.max(1, maxDistance) : 1;
+	if (!comparableHost) return '';
+
+	for (const official of officialDomains) {
+		const officialHost = normalizeHostname(official);
+		if (!officialHost) continue;
+		if (hostnameMatches(host, officialHost)) continue;
+		const comparableOfficial = getComparableDomain(officialHost);
+		if (!comparableOfficial || comparableHost === comparableOfficial) continue;
+		if (levenshteinDistance(comparableHost, comparableOfficial, limit) <= limit) {
+			return comparableOfficial;
+		}
+	}
+	return '';
 }
 
 function hasCredentialKeyword(urlText, keywords) {
@@ -90,8 +142,10 @@ function buildPhishingAssessment(rawUrl, config) {
 	const reasons = [];
 	const suspiciousDomains = Array.isArray(phishing.suspiciousDomains) ? phishing.suspiciousDomains : [];
 	const trustedDomains = Array.isArray(phishing.trustedDomains) ? phishing.trustedDomains : [];
+	const officialDomains = Array.isArray(phishing.officialDomains) ? phishing.officialDomains : trustedDomains;
 	const keywords = Array.isArray(phishing.keywords) ? phishing.keywords : DEFAULT_KEYWORDS;
 	const suspiciousTlds = Array.isArray(phishing.suspiciousTlds) ? phishing.suspiciousTlds : DEFAULT_SUSPICIOUS_TLDS;
+	const lookalikeMaxDistance = Number.isFinite(phishing.lookalikeMaxDistance) ? phishing.lookalikeMaxDistance : 1;
 
 	for (const rule of trustedDomains) {
 		if (hostnameMatches(hostname, rule)) return { suspicious: false, reasons: [] };
@@ -99,6 +153,10 @@ function buildPhishingAssessment(rawUrl, config) {
 
 	for (const rule of suspiciousDomains) {
 		if (hostnameMatches(hostname, rule)) reasons.push(`suspicious domain: ${rule}`);
+	}
+	const lookalikeOf = findLookalikeOfficialDomain(hostname, officialDomains, lookalikeMaxDistance);
+	if (lookalikeOf) {
+		reasons.push(`lookalike domain of official: ${lookalikeOf}`);
 	}
 	if (hasCredentialKeyword(parsed.pathname + parsed.search, keywords)) {
 		reasons.push('credential/payment related keyword in URL');
@@ -118,7 +176,8 @@ function buildPhishingAssessment(rawUrl, config) {
 
 	const requireKeywordWithHeuristics = phishing.requireKeywordWithHeuristics !== false;
 	const matchedConfiguredDomain = reasons.some((r) => r.startsWith('suspicious domain:'));
-	if (requireKeywordWithHeuristics && !matchedConfiguredDomain) {
+	const matchedLookalikeDomain = reasons.some((r) => r.startsWith('lookalike domain of official:'));
+	if (requireKeywordWithHeuristics && !matchedConfiguredDomain && !matchedLookalikeDomain) {
 		const hasKeyword = reasons.includes('credential/payment related keyword in URL');
 		const hasOtherHeuristic = reasons.some((r) => r !== 'credential/payment related keyword in URL');
 		if (!hasKeyword || !hasOtherHeuristic) return { suspicious: false, reasons: [] };

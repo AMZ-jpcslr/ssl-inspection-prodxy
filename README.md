@@ -88,10 +88,14 @@ Admin セクションの `clear access log` から、アクセスログを空に
 判定はプロトタイプ用のヒューリスティックです。`config.json` の `phishing` で調整できます。
 
 - `suspiciousDomains`: 常に警告したいドメイン
+- `officialDomains`: 似せたドメインを検出したい公式ドメイン
 - `trustedDomains`: 警告対象から外したいドメイン
 - `keywords`: ログイン/認証/決済などを示すキーワード
 - `suspiciousTlds`: 警戒対象にするトップレベルドメイン
+- `lookalikeMaxDistance`: 公式ドメインと何文字違いまで警告するか（既定は1）
 - `requireKeywordWithHeuristics`: true の場合、TLDや多段サブドメインなどの特徴だけでは警告せず、認証・決済系キーワードとの組み合わせで警告します
+
+`officialDomains` に `google.com` を入れている場合、`gooogle.com` や `gogle.com` のような1文字違いのドメインは、キーワードが無くても警告対象になります。正規の `google.com` や `mail.google.com` は `trustedDomains` に一致するため警告されません。
 
 ## 監査ログ（管理操作の記録）
 

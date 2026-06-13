@@ -38,9 +38,11 @@
   "phishing": {
     "enabled": true,
     "suspiciousDomains": [],
+    "officialDomains": ["google.com", "yahoo.co.jp"],
     "trustedDomains": ["google.com", "yahoo.co.jp"],
     "keywords": ["login", "verify", "verification", "account", "secure", "security", "password", "update", "confirm", "wallet", "payment", "bank"],
     "suspiciousTlds": ["zip", "mov", "click", "work", "top", "xyz", "loan", "tk"],
+    "lookalikeMaxDistance": 1,
     "requireKeywordWithHeuristics": true
   },
   "inspection": {
