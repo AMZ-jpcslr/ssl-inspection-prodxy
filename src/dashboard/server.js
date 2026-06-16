@@ -43,6 +43,7 @@ const {
 	DASHBOARD_BODY_PAGE_MAX_CHARS,
 	renderDashboardHtml,
 	renderDiagnosticsHtml,
+	renderReportHtml,
 	renderPiiDetailHtml,
 	computeDashboardEntryKey,
 } = require('./render');
@@ -663,6 +664,7 @@ function startDashboard(config) {
 			method,
 			status,
 			onlyPii: firstQueryValue(query && query.pii) === '1',
+			onlyPhishing: firstQueryValue(query && query.phishing) === '1',
 			onlyBlocked: firstQueryValue(query && query.blocked) === '1',
 			onlyFiles: firstQueryValue(query && query.files) === '1',
 		};
@@ -704,9 +706,94 @@ function startDashboard(config) {
 		if (f.method && method !== f.method) return false;
 		if (f.status && !status.startsWith(f.status)) return false;
 		if (f.onlyPii && !pii) return false;
+		if (f.onlyPhishing && entry.phishingWarning !== true) return false;
 		if (f.onlyBlocked && entry.blocked !== true) return false;
 		if (f.onlyFiles && !entryHasFile(entry)) return false;
 		return true;
+	}
+
+	function incrementCount(map, key) {
+		const normalized = String(key || '(unknown)');
+		map.set(normalized, (map.get(normalized) || 0) + 1);
+	}
+
+	function countRows(map, limit) {
+		return Array.from(map.entries())
+			.map(([label, count]) => ({ label, count }))
+			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+			.slice(0, limit);
+	}
+
+	function statusBucket(status) {
+		const n = Number(status);
+		if (!Number.isFinite(n)) return '(none)';
+		if (n >= 200 && n < 300) return '2xx';
+		if (n >= 300 && n < 400) return '3xx';
+		if (n >= 400 && n < 500) return '4xx';
+		if (n >= 500 && n < 600) return '5xx';
+		return String(status);
+	}
+
+	function buildAccessLogReport(entries) {
+		const rows = Array.isArray(entries) ? entries : [];
+		const domains = new Map();
+		const methods = new Map();
+		const statuses = new Map();
+		const warnings = [];
+		const summary = {
+			total: rows.length,
+			https: 0,
+			blocked: 0,
+			phishing: 0,
+			pii: 0,
+			email: 0,
+			card: 0,
+			phone: 0,
+			files: 0,
+		};
+
+		for (const entry of rows) {
+			if (!entry) continue;
+			const domain = String(entry.domain || '').trim() || '(unknown)';
+			const method = String(entry.method || '').trim().toUpperCase() || '(none)';
+			const hasPii =
+				entry.piiEmailDetected === true || entry.piiCardDetected === true || entry.piiPhoneDetected === true;
+
+			incrementCount(domains, domain);
+			incrementCount(methods, method);
+			incrementCount(statuses, statusBucket(entry.status));
+
+			if (entry.ssl === true) summary.https += 1;
+			if (entry.blocked === true) summary.blocked += 1;
+			if (entry.phishingWarning === true) summary.phishing += 1;
+			if (hasPii) summary.pii += 1;
+			if (entry.piiEmailDetected === true) summary.email += 1;
+			if (entry.piiCardDetected === true) summary.card += 1;
+			if (entry.piiPhoneDetected === true) summary.phone += 1;
+			if (entryHasFile(entry)) summary.files += 1;
+
+			if (entry.blocked === true || entry.phishingWarning === true || hasPii) {
+				warnings.push({
+					timestamp: entry.timestamp || '',
+					method,
+					status: entry.status === undefined || entry.status === null ? '' : String(entry.status),
+					domain,
+					url: entry.URL || '',
+					blocked: entry.blocked === true,
+					phishing: entry.phishingWarning === true,
+					pii: hasPii,
+				});
+			}
+		}
+
+		return {
+			generatedAt: new Date().toISOString(),
+			summary,
+			topDomains: countRows(domains, 10),
+			methods: countRows(methods, 10),
+			statuses: countRows(statuses, 10),
+			recentWarnings: warnings.slice(-20).reverse(),
+		};
 	}
 
 	app.get('/', (req, res) => {
@@ -750,6 +837,13 @@ function startDashboard(config) {
 				tlsBypassDomains: Array.isArray(tlsBypass.domains) ? tlsBypass.domains : [],
 			})
 		);
+	});
+
+	app.get('/reports', (req, res) => {
+		const entries = readLastJsonlEntries(logPath, maxEntries);
+		res.setHeader('cache-control', 'no-store');
+		res.setHeader('content-type', 'text/html; charset=utf-8');
+		res.end(renderReportHtml(buildAccessLogReport(entries)));
 	});
 
 	app.post('/settings/blocking', requireCsrf, (req, res) => {

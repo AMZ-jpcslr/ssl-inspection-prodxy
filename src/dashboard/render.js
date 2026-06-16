@@ -304,7 +304,7 @@ function computeDashboardEntryKey(entry) {
 
 function hasActiveLogFilters(filters) {
 	const f = filters && typeof filters === 'object' ? filters : {};
-	return Boolean(f.q || f.domain || f.method || f.status || f.onlyPii || f.onlyBlocked || f.onlyFiles);
+	return Boolean(f.q || f.domain || f.method || f.status || f.onlyPii || f.onlyPhishing || f.onlyBlocked || f.onlyFiles);
 }
 
 function renderInlineList(items, emptyText) {
@@ -394,6 +394,7 @@ function renderDashboardHtml(entries, opts) {
 		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
 			<div style="font-weight:600">管理</div>
 			<div style="display:flex; gap:12px; align-items:center;">
+				<a href="/reports">レポート</a>
 				<a href="/diagnostics">接続診断</a>
 				<a href="/audit">監査ログ</a>
 				${authEnabled ? `<a href="/logout">ログアウト</a>` : ''}
@@ -515,6 +516,10 @@ function renderDashboardHtml(entries, opts) {
 			<label class="check">
 				<input type="checkbox" name="pii" value="1"${filters.onlyPii ? ' checked' : ''} />
 				<span>PIIのみ</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" name="phishing" value="1"${filters.onlyPhishing ? ' checked' : ''} />
+				<span>フィッシング警告のみ</span>
 			</label>
 			<label class="check">
 				<input type="checkbox" name="blocked" value="1"${filters.onlyBlocked ? ' checked' : ''} />
@@ -755,6 +760,118 @@ function renderPiiDetailHtml({ entry, idParam, index, authEnabled, wantReveal })
 </html>`;
 }
 
+function renderReportHtml(report) {
+	const data = report && typeof report === 'object' ? report : {};
+	const summary = data.summary && typeof data.summary === 'object' ? data.summary : {};
+	const topDomains = Array.isArray(data.topDomains) ? data.topDomains : [];
+	const methods = Array.isArray(data.methods) ? data.methods : [];
+	const statuses = Array.isArray(data.statuses) ? data.statuses : [];
+	const recentWarnings = Array.isArray(data.recentWarnings) ? data.recentWarnings : [];
+
+	function numberCell(value) {
+		return escapeHtml(String(Number.isFinite(value) ? value : 0));
+	}
+
+	function countTable(rows, emptyText) {
+		if (!rows.length) return `<p class="meta">${escapeHtml(emptyText || 'No data')}</p>`;
+		return `<table>
+			<thead><tr><th>項目</th><th>件数</th></tr></thead>
+			<tbody>
+				${rows
+					.map(
+						(row) => `<tr>
+							<td>${escapeHtml(row.label || '')}</td>
+							<td>${numberCell(row.count)}</td>
+						</tr>`
+					)
+					.join('')}
+			</tbody>
+		</table>`;
+	}
+
+	const warningRows = recentWarnings.length
+		? recentWarnings
+				.map((entry) => {
+					const flags = [
+						entry.phishing ? 'phishing' : '',
+						entry.pii ? 'PII' : '',
+						entry.blocked ? 'blocked' : '',
+					]
+						.filter(Boolean)
+						.join(', ');
+					return `<tr>
+						<td>${escapeHtml(entry.timestamp || '')}</td>
+						<td>${escapeHtml(entry.domain || '')}</td>
+						<td>${escapeHtml(entry.method || '')}</td>
+						<td>${escapeHtml(entry.status || '')}</td>
+						<td>${escapeHtml(flags || '-')}</td>
+						<td style="word-break:break-all">${escapeHtml(entry.url || '')}</td>
+					</tr>`;
+				})
+				.join('')
+		: `<tr><td colspan="6" class="meta">警告ログはありません</td></tr>`;
+
+	return `<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>アクセスログレポート</title>
+		<style>
+			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; line-height: 1.6; }
+			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
+			.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+			.metric { border: 1px solid #ddd; border-radius: 6px; padding: 10px; background: #fafafa; }
+			.metric strong { display: block; font-size: 22px; }
+			.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+			table { width: 100%; border-collapse: collapse; }
+			th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+			code { background: #f5f5f5; padding: 1px 4px; border-radius: 4px; }
+			.meta { color:#444; }
+		</style>
+	</head>
+	<body>
+		<div class="meta"><a href="/">&larr; 戻る</a></div>
+		<h1>アクセスログレポート</h1>
+		<p class="meta">生成日時 <code>${escapeHtml(data.generatedAt || '')}</code></p>
+		<div class="card summary-grid">
+			<div class="metric"><span>総ログ数</span><strong>${numberCell(summary.total)}</strong></div>
+			<div class="metric"><span>HTTPS</span><strong>${numberCell(summary.https)}</strong></div>
+			<div class="metric"><span>フィッシング警告</span><strong>${numberCell(summary.phishing)}</strong></div>
+			<div class="metric"><span>PII警告</span><strong>${numberCell(summary.pii)}</strong></div>
+			<div class="metric"><span>ブロック</span><strong>${numberCell(summary.blocked)}</strong></div>
+			<div class="metric"><span>保存ファイル</span><strong>${numberCell(summary.files)}</strong></div>
+		</div>
+		<div class="card summary-grid">
+			<div class="metric"><span>メール</span><strong>${numberCell(summary.email)}</strong></div>
+			<div class="metric"><span>カード番号</span><strong>${numberCell(summary.card)}</strong></div>
+			<div class="metric"><span>電話番号</span><strong>${numberCell(summary.phone)}</strong></div>
+		</div>
+		<div class="grid">
+			<div class="card">
+				<h2>上位ドメイン</h2>
+				${countTable(topDomains, 'ドメインはありません')}
+			</div>
+			<div class="card">
+				<h2>メソッド</h2>
+				${countTable(methods, 'メソッドはありません')}
+			</div>
+			<div class="card">
+				<h2>ステータス分類</h2>
+				${countTable(statuses, 'ステータスはありません')}
+			</div>
+		</div>
+		<div class="card">
+			<h2>最近の警告</h2>
+			<table>
+				<thead><tr><th>時刻</th><th>ドメイン</th><th>メソッド</th><th>状態</th><th>種別</th><th>URL</th></tr></thead>
+				<tbody>${warningRows}</tbody>
+			</table>
+		</div>
+	</body>
+</html>`;
+}
+
 function renderDiagnosticsHtml(options) {
 	const opts = options && typeof options === 'object' ? options : {};
 	const dashboardUrl = typeof opts.dashboardUrl === 'string' ? opts.dashboardUrl : 'http://127.0.0.1:3001';
@@ -829,6 +946,7 @@ module.exports = {
 	truncateForDashboard,
 	renderDashboardHtml,
 	renderDiagnosticsHtml,
+	renderReportHtml,
 	renderPiiDetailHtml,
 	computeDashboardEntryKey,
 };
