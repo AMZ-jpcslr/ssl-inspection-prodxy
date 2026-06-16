@@ -91,6 +91,9 @@ function loadConfig() {
   if (process.env.PROXY_PORT) config.proxy = { ...(config.proxy || {}), port: Number(process.env.PROXY_PORT) };
   if (process.env.DASHBOARD_HOST) config.dashboard = { ...(config.dashboard || {}), host: process.env.DASHBOARD_HOST };
   if (process.env.DASHBOARD_PORT) config.dashboard = { ...(config.dashboard || {}), port: Number(process.env.DASHBOARD_PORT) };
+  if (process.env.DASHBOARD_PUBLIC_BASE_URL) {
+    config.dashboard = { ...(config.dashboard || {}), publicBaseUrl: process.env.DASHBOARD_PUBLIC_BASE_URL };
+  }
   if (process.env.LOG_PATH) config.logging = { ...(config.logging || {}), path: process.env.LOG_PATH };
 
   // Dashboard auth overrides

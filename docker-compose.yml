@@ -18,6 +18,7 @@ services:
       # Bind dashboard to all interfaces inside the container so port mapping works
       DASHBOARD_HOST: "0.0.0.0"
       DASHBOARD_PORT: "3001"
+      DASHBOARD_PUBLIC_BASE_URL: "http://127.0.0.1:3001"
       PROXY_HOST: "0.0.0.0"
       PROXY_PORT: "8080"
       LOG_PATH: "./data/access.log.jsonl"

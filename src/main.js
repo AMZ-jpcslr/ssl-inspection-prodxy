@@ -50,7 +50,7 @@ const { parseContentType, isTextLikeMime, looksBinary, decodeTextBodyForPii } = 
 const { buildEmailPiiFields, buildCardPiiFields, buildPhonePiiFields } = require('./pii');
 const { configurePolicyStore, getBlockDomains } = require('./policyStore');
 const { buildPhishingAssessment } = require('./phishing');
-const { isTemporarilyAllowed } = require('./phishingStore');
+const { createProceedToken, isTemporarilyAllowed } = require('./phishingStore');
 
 // このプロトタイプがやること（ざっくり）
 // 1) 従業員端末のブラウザに「明示プロキシ」を設定してもらう
@@ -281,6 +281,9 @@ function buildLogEntry({ url, method, status, hostname }) {
 
 function getDashboardPublicBaseUrl(config) {
 	const dashboard = config && config.dashboard ? config.dashboard : {};
+	if (typeof dashboard.publicBaseUrl === 'string' && dashboard.publicBaseUrl) {
+		return dashboard.publicBaseUrl.replace(/\/+$/, '');
+	}
 	const host = dashboard.host && dashboard.host !== '0.0.0.0' ? dashboard.host : '127.0.0.1';
 	const port = dashboard.port || 3001;
 	return `http://${host}:${port}`;
@@ -793,7 +796,8 @@ function startMitmProxy(config) {
 		const phishingAssessment = buildPhishingAssessment(fullUrl, config);
 		if (phishingAssessment.suspicious && !isTemporarilyAllowed(fullUrl)) {
 			const dashboardBaseUrl = getDashboardPublicBaseUrl(config);
-			const proceedUrl = `${dashboardBaseUrl}/phishing/proceed?url=${encodeURIComponent(fullUrl)}`;
+			const proceedToken = createProceedToken(fullUrl, 5 * 60);
+			const proceedUrl = `${dashboardBaseUrl}/phishing/proceed?url=${encodeURIComponent(fullUrl)}&token=${encodeURIComponent(proceedToken)}`;
 			resToClient.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
 			resToClient.end(
 				renderPhishingWarningHtml({

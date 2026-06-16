@@ -28,7 +28,7 @@ const {
 	setBlockDomains,
 	normalizeDomainList,
 } = require('../policyStore');
-const { addTemporaryAllow } = require('../phishingStore');
+const { consumeProceedToken } = require('../phishingStore');
 const {
 	createScryptPasswordHash,
 	generateSessionSecret,
@@ -217,6 +217,9 @@ function startDashboard(config) {
 
 	function getDashboardDisplayUrl() {
 		const dashboard = config && config.dashboard ? config.dashboard : {};
+		if (typeof dashboard.publicBaseUrl === 'string' && dashboard.publicBaseUrl) {
+			return dashboard.publicBaseUrl.replace(/\/+$/, '');
+		}
 		const host = dashboard.host && dashboard.host !== '0.0.0.0' ? dashboard.host : '127.0.0.1';
 		const port = dashboard.port || 3001;
 		return `http://${host}:${port}`;
@@ -449,6 +452,7 @@ function startDashboard(config) {
 
 	app.get('/phishing/proceed', (req, res) => {
 		const rawUrl = req.query && typeof req.query.url === 'string' ? req.query.url : '';
+		const token = req.query && typeof req.query.token === 'string' ? req.query.token : '';
 		let target;
 		try {
 			target = new URL(rawUrl);
@@ -460,7 +464,13 @@ function startDashboard(config) {
 			return;
 		}
 
-		addTemporaryAllow(target.toString(), 5 * 60);
+		if (!consumeProceedToken(target.toString(), token, 5 * 60)) {
+			res.statusCode = 403;
+			res.setHeader('content-type', 'text/plain; charset=utf-8');
+			res.end('フィッシング警告の続行トークンが無効または期限切れです。もう一度アクセスして警告ページから続行してください。');
+			return;
+		}
+
 		audit('phishing_warning_proceed', req, { host: target.hostname, url: target.toString() });
 		res.statusCode = 302;
 		res.setHeader('location', target.toString());
