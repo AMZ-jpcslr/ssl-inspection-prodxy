@@ -313,6 +313,11 @@ function renderInlineList(items, emptyText) {
 	return values.map((item) => `<code>${escapeHtml(item)}</code>`).join(', ');
 }
 
+function countDashboardEntries(entries, predicate) {
+	const rows = Array.isArray(entries) ? entries : [];
+	return rows.reduce((count, entry) => (predicate(entry) ? count + 1 : count), 0);
+}
+
 // ダッシュボードのメイン一覧HTMLを生成する。
 // - entries は server.js で読み込んだログエントリ配列（最新が先頭になるよう整形済み）。
 // - opts には authEnabled / blockDomains / message などを渡す。
@@ -393,12 +398,7 @@ function renderDashboardHtml(entries, opts) {
 	const adminPanelHtml = `<div class="card">
 		<div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
 			<div style="font-weight:600">管理</div>
-			<div style="display:flex; gap:12px; align-items:center;">
-				<a href="/reports">レポート</a>
-				<a href="/diagnostics">接続診断</a>
-				<a href="/audit">監査ログ</a>
-				${authEnabled ? `<a href="/logout">ログアウト</a>` : ''}
-			</div>
+			<div style="color:#5a6475; font-size:13px;">ブロックリストとログ操作</div>
 		</div>
 		<div style="margin-top:10px; color:#444;">ブロック対象ドメイン（1行1件）。保存するとすぐプロキシに反映されます。</div>
 		<form method="post" action="/settings/blocking" style="margin-top:10px;">
@@ -568,6 +568,26 @@ function renderDashboardHtml(entries, opts) {
 		})
 		.join('');
 
+	const metricItems = [
+		['表示中', entries.length, '現在のフィルタ結果'],
+		['全ログ', totalEntries, '読み込み済み件数'],
+		['PII', countDashboardEntries(entries, entryHasPii), '個人情報を検知'],
+		['フィッシング', countDashboardEntries(entries, (entry) => entry && entry.phishingWarning === true), '警告対象URL'],
+		['ブロック', countDashboardEntries(entries, (entry) => entry && entry.blocked === true), '遮断済み通信'],
+		['ファイル', countDashboardEntries(entries, entryHasSavedFile), '保存済み本文/添付'],
+	];
+	const metricsHtml = `<section class="metric-grid" aria-label="ログ概要">
+		${metricItems
+			.map(
+				([label, value, hint]) => `<div class="metric-card">
+					<div class="metric-label">${escapeHtml(label)}</div>
+					<div class="metric-value">${escapeHtml(String(value))}</div>
+					<div class="metric-hint">${escapeHtml(hint)}</div>
+				</div>`
+			)
+			.join('')}
+	</section>`;
+
 	return `<!doctype html>
 <html lang="ja">
 	<head>
@@ -575,19 +595,79 @@ function renderDashboardHtml(entries, opts) {
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>プロキシログ</title>
 		<style>
-			body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
-			.card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 0 0 12px 0; }
-			input, select { padding: 7px; box-sizing: border-box; }
-			label span { display: block; margin-bottom: 4px; color: #444; }
-			.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+			:root {
+				color-scheme: light;
+				--bg: #f6f7f9;
+				--panel: #fff;
+				--line: #d9dee7;
+				--line-soft: #e8ebf0;
+				--text: #172033;
+				--muted: #5a6475;
+				--accent: #0f766e;
+				--accent-soft: #e8f5f3;
+				--danger: #b42318;
+				--warn: #b26a00;
+			}
+			* { box-sizing: border-box; }
+			body {
+				font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				line-height: 1.55;
+			}
+			.page { max-width: 1440px; margin: 0 auto; padding: 20px; }
+			.topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+			.brand-title { margin: 0; font-size: 22px; line-height: 1.2; }
+			.brand-subtitle { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+			.nav-actions { display:flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+			.card {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 14px;
+				margin: 0 0 14px 0;
+				box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+			}
+			.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+			.metric-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+			.metric-label { color: var(--muted); font-size: 12px; font-weight: 700; }
+			.metric-value { font-size: 28px; font-weight: 750; line-height: 1.15; margin-top: 4px; }
+			.metric-hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+			input, select, textarea {
+				padding: 8px 10px;
+				box-sizing: border-box;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				background: #fff;
+				color: var(--text);
+			}
+			input:focus, select:focus, textarea:focus { outline: 2px solid rgba(15, 118, 110, 0.22); border-color: var(--accent); }
+			button, .button, .nav-actions a {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-height: 34px;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				padding: 7px 10px;
+				background: #fff;
+				color: var(--text);
+				text-decoration: none;
+				font-weight: 650;
+				cursor: pointer;
+			}
+			button:hover, .button:hover, .nav-actions a:hover { border-color: var(--accent); background: var(--accent-soft); }
+			label span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
+			.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
 			.filter-grid label input, .filter-grid label select { width: 100%; }
 			.filter-grid .check { display: flex; gap: 6px; align-items: center; padding-bottom: 8px; }
-			.filter-grid .check span { display: inline; margin: 0; color: #222; }
+			.filter-grid .check span { display: inline; margin: 0; color: var(--text); }
 			.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: end; }
 			.settings-grid input, .settings-grid select, .settings-grid textarea { width: 100%; box-sizing: border-box; }
 			.settings-grid .check { display: flex; gap: 6px; align-items: center; padding-bottom: 8px; }
 			.settings-grid .check input { width:auto; }
-			.settings-grid .check span { display: inline; margin: 0; color: #222; }
+			.settings-grid .check span { display: inline; margin: 0; color: var(--text); }
 			.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 			.health-item { border: 1px solid #ddd; border-radius: 6px; padding: 8px; }
 			.health-item.ok { border-left: 4px solid #087f23; }
@@ -597,21 +677,50 @@ function renderDashboardHtml(entries, opts) {
 			.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 			.badges { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:4px; }
 			.badge { display:inline-block; border-radius:999px; padding:1px 6px; font-size:12px; line-height:1.6; border:1px solid #ccc; color:#333; background:#f7f7f7; }
-			.badge.danger { border-color:#a00; color:#a00; background:#fff5f5; }
-			.badge.warn { border-color:#b26a00; color:#7a4700; background:#fff8e8; }
+			.badge.danger { border-color:var(--danger); color:var(--danger); background:#fff5f5; }
+			.badge.warn { border-color:var(--warn); color:#7a4700; background:#fff8e8; }
 			.badge.neutral { border-color:#bbb; color:#333; background:#f7f7f7; }
 			code { background: #f5f5f5; padding: 1px 4px; border-radius: 4px; }
 			textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+			.table-wrap {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				overflow: auto;
+				box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+			}
 			table { width: 100%; border-collapse: collapse; }
-			th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
-			th { position: sticky; top: 0; background: #fff; }
-			.meta { margin: 0 0 12px 0; color: #444; }
-			.pii-row td:first-child { border-left: 4px solid #a00; }
+			th, td { border-bottom: 1px solid var(--line-soft); padding: 10px; text-align: left; vertical-align: top; }
+			th { position: sticky; top: 0; background: #f9fafb; color: var(--muted); font-size: 12px; z-index: 1; }
+			tbody tr:hover { background: #fbfcfd; }
+			.meta { margin: 0 0 12px 0; color: var(--muted); }
+			.log-header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin: 6px 0 8px; }
+			.log-count { color: var(--muted); font-size: 13px; }
+			.pii-row td:first-child { border-left: 4px solid var(--danger); }
 			/* Make the summary columns stand out (timestamp..URL), but keep body columns readable */
-			.pii-row td:nth-child(-n+5) { color: #a00; font-weight: 600; }
+			.pii-row td:nth-child(-n+5) { color: var(--danger); font-weight: 600; }
+			@media (max-width: 760px) {
+				.page { padding: 12px; }
+				.topbar { align-items: flex-start; flex-direction: column; }
+				.metric-value { font-size: 24px; }
+			}
 		</style>
 	</head>
 	<body>
+		<div class="page">
+			<header class="topbar">
+				<div>
+					<h1 class="brand-title">SSL Inspection Proxy</h1>
+					<p class="brand-subtitle">ローカルプロキシの通信ログ、検知、設定をまとめて確認できます。</p>
+				</div>
+				<nav class="nav-actions" aria-label="管理メニュー">
+					<a href="/reports">レポート</a>
+					<a href="/diagnostics">接続診断</a>
+					<a href="/audit">監査ログ</a>
+					${authEnabled ? `<a href="/logout">ログアウト</a>` : ''}
+				</nav>
+			</header>
+			${metricsHtml}
 		${healthHtml}
 		${firstRunHtml}
 		${adminPanelHtml}
@@ -620,6 +729,7 @@ function renderDashboardHtml(entries, opts) {
 		${messageHtml}
 		${refreshPanelHtml}
 		<p class="meta">最新 ${escapeHtml(String(totalEntries))} 件中 ${escapeHtml(String(entries.length))} 件を表示</p>
+		<div class="table-wrap">
 		<table>
 			<thead>
 				<tr>
@@ -636,6 +746,8 @@ function renderDashboardHtml(entries, opts) {
 				${rows}
 			</tbody>
 		</table>
+		</div>
+		</div>
 		${autoRefreshEnabled ? `<script>
 			window.setTimeout(function () {
 				if (document.visibilityState === 'visible') window.location.reload();

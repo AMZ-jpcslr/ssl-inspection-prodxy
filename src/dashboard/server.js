@@ -83,6 +83,17 @@ function startDashboard(config) {
 	const sessionTtlSeconds = Number.isFinite(dashboardAuth.sessionTtlSeconds) ? dashboardAuth.sessionTtlSeconds : 60 * 60 * 8;
 	const cookieName = 'dashboard_session';
 	const setupRequired = authEnabled && !isDashboardAuthConfigured();
+	const security = config && config.security && typeof config.security === 'object' ? config.security : {};
+	const rateLimitConfig = security.rateLimit && typeof security.rateLimit === 'object' ? security.rateLimit : {};
+	const loginLimitConfig =
+		security.loginAttemptLimit && typeof security.loginAttemptLimit === 'object' ? security.loginAttemptLimit : {};
+	const rateLimitEnabled = rateLimitConfig.enabled !== false;
+	const rateLimitWindowMs = Math.max(1, Number(rateLimitConfig.windowSeconds) || 60) * 1000;
+	const rateLimitMax = Math.max(1, Math.floor(Number(rateLimitConfig.maxRequests) || 120));
+	const loginAttemptLimitEnabled = loginLimitConfig.enabled !== false;
+	const loginAttemptWindowMs = Math.max(1, Number(loginLimitConfig.windowSeconds) || 300) * 1000;
+	const loginAttemptMax = Math.max(1, Math.floor(Number(loginLimitConfig.maxFailures) || 5));
+	const loginLockoutMs = Math.max(1, Number(loginLimitConfig.lockoutSeconds) || 900) * 1000;
 
 	function isDashboardAuthConfigured() {
 		return Boolean(
@@ -333,6 +344,129 @@ function startDashboard(config) {
 		}
 	}
 
+	function createFixedWindowLimiter({ enabled, windowMs, max }) {
+		const buckets = new Map();
+		return {
+			check(key, nowMs) {
+				if (!enabled) return { allowed: true, remaining: max, retryAfterSeconds: 0 };
+				const normalizedKey = String(key || 'unknown');
+				let bucket = buckets.get(normalizedKey);
+				if (!bucket || nowMs - bucket.windowStart >= windowMs) {
+					bucket = { windowStart: nowMs, count: 0, lastLimitedAuditAt: 0 };
+					buckets.set(normalizedKey, bucket);
+				}
+				bucket.count += 1;
+
+				if (buckets.size > 2000) {
+					for (const [bucketKey, value] of buckets.entries()) {
+						if (nowMs - value.windowStart >= windowMs) buckets.delete(bucketKey);
+					}
+				}
+
+				const retryAfterSeconds = Math.max(1, Math.ceil((bucket.windowStart + windowMs - nowMs) / 1000));
+				if (bucket.count > max) {
+					const shouldAudit = nowMs - bucket.lastLimitedAuditAt >= windowMs;
+					if (shouldAudit) bucket.lastLimitedAuditAt = nowMs;
+					return { allowed: false, remaining: 0, retryAfterSeconds, count: bucket.count, shouldAudit };
+				}
+				return {
+					allowed: true,
+					remaining: Math.max(0, max - bucket.count),
+					retryAfterSeconds,
+					count: bucket.count,
+				};
+			},
+		};
+	}
+
+	const dashboardRateLimiter = createFixedWindowLimiter({
+		enabled: rateLimitEnabled,
+		windowMs: rateLimitWindowMs,
+		max: rateLimitMax,
+	});
+	const loginAttempts = new Map();
+
+	function getLoginAttemptKey(req, username) {
+		return `${getRemoteAddr(req) || 'unknown'}:${String(username || '').trim().toLowerCase() || 'unknown'}`;
+	}
+
+	function getLoginAttemptState(key, nowMs) {
+		let state = loginAttempts.get(key);
+		if (!state || nowMs - state.windowStart >= loginAttemptWindowMs) {
+			state = {
+				windowStart: nowMs,
+				failures: 0,
+				lockedUntil: state && state.lockedUntil > nowMs ? state.lockedUntil : 0,
+			};
+			loginAttempts.set(key, state);
+		}
+		if (loginAttempts.size > 2000) {
+			for (const [attemptKey, value] of loginAttempts.entries()) {
+				if (value.lockedUntil <= nowMs && nowMs - value.windowStart >= loginAttemptWindowMs) {
+					loginAttempts.delete(attemptKey);
+				}
+			}
+		}
+		return state;
+	}
+
+	function getLoginLockStatus(req, username) {
+		if (!loginAttemptLimitEnabled) return { locked: false, retryAfterSeconds: 0 };
+		const nowMs = Date.now();
+		const key = getLoginAttemptKey(req, username);
+		const state = getLoginAttemptState(key, nowMs);
+		if (state.lockedUntil > nowMs) {
+			return {
+				locked: true,
+				key,
+				retryAfterSeconds: Math.max(1, Math.ceil((state.lockedUntil - nowMs) / 1000)),
+			};
+		}
+		return { locked: false, key, retryAfterSeconds: 0 };
+	}
+
+	function recordLoginFailure(req, username) {
+		if (!loginAttemptLimitEnabled) return;
+		const nowMs = Date.now();
+		const key = getLoginAttemptKey(req, username);
+		const state = getLoginAttemptState(key, nowMs);
+		state.failures += 1;
+		const locked = state.failures >= loginAttemptMax;
+		if (locked) state.lockedUntil = nowMs + loginLockoutMs;
+		audit(locked ? 'login_locked' : 'login_failed', req, {
+			username: String(username || ''),
+			failures: state.failures,
+			maxFailures: loginAttemptMax,
+			lockoutSeconds: locked ? Math.ceil(loginLockoutMs / 1000) : 0,
+		});
+	}
+
+	function recordLoginSuccess(req, username) {
+		if (!loginAttemptLimitEnabled) return;
+		loginAttempts.delete(getLoginAttemptKey(req, username));
+	}
+
+	app.use((req, res, next) => {
+		const result = dashboardRateLimiter.check(getRemoteAddr(req), Date.now());
+		res.setHeader('x-ratelimit-limit', String(rateLimitMax));
+		res.setHeader('x-ratelimit-remaining', String(result.remaining));
+		if (result.allowed) return next();
+		res.setHeader('retry-after', String(result.retryAfterSeconds));
+		if (result.shouldAudit) {
+			audit('rate_limit_exceeded', req, {
+				path: req.path,
+				method: req.method,
+				count: result.count,
+				limit: rateLimitMax,
+				windowSeconds: Math.ceil(rateLimitWindowMs / 1000),
+				retryAfterSeconds: result.retryAfterSeconds,
+			});
+		}
+		res.statusCode = 429;
+		res.setHeader('content-type', 'text/plain; charset=utf-8');
+		res.end('Too many requests. Please wait and try again.');
+	});
+
 	function loginPageHtml(message) {
 		// ログインページはテンプレートなしでHTML文字列を組み立てる（MVP）。
 		const msg = message ? `<div style="color:#a00; margin:0 0 12px 0;">${escapeHtml(message)}</div>` : '';
@@ -571,12 +705,26 @@ function startDashboard(config) {
 			}
 			const username = req.body && typeof req.body.username === 'string' ? req.body.username : '';
 			const password = req.body && typeof req.body.password === 'string' ? req.body.password : '';
+			const lockStatus = getLoginLockStatus(req, username);
+			if (lockStatus.locked) {
+				audit('login_blocked_by_lockout', req, {
+					username,
+					retryAfterSeconds: lockStatus.retryAfterSeconds,
+				});
+				res.statusCode = 429;
+				res.setHeader('retry-after', String(lockStatus.retryAfterSeconds));
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.end(loginPageHtml(`ログイン試行が多すぎます。${lockStatus.retryAfterSeconds}秒後に再試行してください。`));
+				return;
+			}
 			if (username !== authUsername || !verifyScryptPassword(password, authPasswordHash)) {
+				recordLoginFailure(req, username);
 				res.statusCode = 401;
 				res.setHeader('content-type', 'text/html; charset=utf-8');
 				res.end(loginPageHtml('ユーザー名またはパスワードが違います。'));
 				return;
 			}
+			recordLoginSuccess(req, username);
 			audit('login', req, { username: authUsername }, authUsername);
 			const maxAge = Math.max(60, sessionTtlSeconds);
 			const exp = Math.floor(Date.now() / 1000) + maxAge;

@@ -25,6 +25,19 @@
     "sessionSecret": "",
     "sessionTtlSeconds": 28800
   },
+  "security": {
+    "rateLimit": {
+      "enabled": true,
+      "windowSeconds": 60,
+      "maxRequests": 120
+    },
+    "loginAttemptLimit": {
+      "enabled": true,
+      "windowSeconds": 300,
+      "maxFailures": 5,
+      "lockoutSeconds": 900
+    }
+  },
   "logging": {
     "path": "./data/access.log.jsonl",
     "maxEntriesInMemory": 500
